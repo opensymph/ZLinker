@@ -1,4 +1,4 @@
-name: Release APK
+name: Release
 
 on:
   push:
@@ -6,11 +6,9 @@ on:
       - 'v*'
 
 jobs:
-  build:
-    name: Build & Release APK
+  android:
+    name: Build Android APK
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -29,16 +27,62 @@ jobs:
       - name: Pub get
         run: flutter pub get
 
-      - name: Build APK
-        run: flutter build apk --release
+      - name: Build APK (github channel)
+        run: flutter build apk --release --dart-define=APP_CHANNEL=github
 
       - name: Rename artifact
         run: |
           mv build/app/outputs/flutter-apk/app-release.apk \
              zremote-${{ github.ref_name }}.apk
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: zremote-${{ github.ref_name }}.apk
+
+  ios:
+    name: Build iOS (unsigned)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Pub get
+        run: flutter pub get
+
+      - name: Build iOS (no codesign)
+        run: |
+          flutter build ios --release --no-codesign \
+            --dart-define=APP_CHANNEL=appstore
+
+      - name: Pack Runner.app
+        run: |
+          cd build/ios/iphoneos
+          zip -r "$GITHUB_WORKSPACE/zremote-${{ github.ref_name }}-ios-unsigned.zip" Runner.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-app
+          path: zremote-${{ github.ref_name }}-ios-unsigned.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: [android, ios]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: zremote-${{ github.ref_name }}.apk
+          files: dist/*
           generate_release_notes: true

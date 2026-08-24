@@ -172,6 +172,20 @@ class _RemotePageState extends State<RemotePage> {
   String _deepLinkJs() =>
       buildDeepLinkJs(widget.targetSessionId ?? '', widget.targetTitle);
 
+  /// Ensures the device URL carries its `theme=` query when present so the
+  /// official web remote opens in the matching color scheme.
+  String get _launchUrl {
+    final raw = widget.device.url;
+    final theme = widget.device.params?.theme;
+    if (theme == null || theme.isEmpty) return raw;
+    final uri = Uri.parse(raw);
+    if (uri.queryParameters['theme'] == theme) return raw;
+    return uri.replace(queryParameters: {
+      ...uri.queryParameters,
+      'theme': theme,
+    }).toString();
+  }
+
   @override
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
@@ -198,7 +212,7 @@ class _RemotePageState extends State<RemotePage> {
           PopupMenuButton<String>(
             onSelected: (v) async {
               if (v == 'browser') {
-                await launchUrl(Uri.parse(widget.device.url),
+                await launchUrl(Uri.parse(_launchUrl),
                     mode: LaunchMode.externalApplication);
               } else if (v == 'reload') {
                 await _controller?.reload();
@@ -227,7 +241,7 @@ class _RemotePageState extends State<RemotePage> {
         children: [
           InAppWebView(
             initialUrlRequest:
-                URLRequest(url: WebUri(widget.device.url)),
+                URLRequest(url: WebUri(_launchUrl)),
             initialSettings: InAppWebViewSettings(
               javaScriptEnabled: true,
               domStorageEnabled: true,

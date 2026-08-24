@@ -72,7 +72,7 @@ Sounds good? **Star ⭐ the repo** to follow along.
 
 | | |
 |---|---|
-| 📋 **Device list** | Cards with device name, host, last-used time, online status dot and running-task badge; rename, delete, copy link, open in browser; export / import your device backup as JSON |
+| 📋 **Device list** | Cards with device name, host, last-used time, online status dot and running-task badge; drag-to-reorder, pin; rename, delete, copy link, open in browser; clipboard offer-to-add; export / import your device backup as JSON |
 | ➕ **Add by scan, paste, or screenshot** | Camera QR scan (`mobile_scanner`), pure-Dart gallery QR decode (`zxing2`), or paste a URL — with de-duplication; unparseable links are still saved, never lost |
 | 📊 **Native task list** | Official mobile layout: workspace cards (本地 badge, path, updated-at, task count), task rows with phase pills (running spinner / ✓ / failed), relative times, current-task highlight; always-on connection banner; pinned group; long-press bottom sheet (stop / pause / resume); collapse-all / tidy / refresh; ≥768dp dual pane (264dp sidebar + embedded chat) |
 | 💬 **Native conversation** | Full Conversation V4: grouped turns with streaming markdown, 思考过程 strips, tool-call summaries + diffs, file-change bars with rewind, feedback (👍/👎/fork), pending interactions (permissions & questions), held queue with auto-drain, model / mode / thought / follow-up switching, attachments, slash commands + `$skills`, usage ring, context bar, older-history paging, takeover overlay, retry / edit-resend / fork / rewind long-press actions |
@@ -98,8 +98,21 @@ with its own connection.
 
 ## 📸 Screenshots
 
-Coming with the first tagged release. Want to help capture them? See
-[Contributing](#-contributing).
+<p align="center">
+  <img src="docs/screenshots/01-list-mobile.png" width="240" alt="Mobile task list" />
+  <img src="docs/screenshots/02-chat-mobile.png" width="240" alt="Mobile chat" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/03-dual-pane.png" width="720" alt="Desktop dual-pane" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/demo.gif" width="320" alt="ZRemote demo" />
+</p>
+
+Mobile list → chat, and the ≥768dp IDE sidebar + chat pane. The native
+UI mirrors the official remote layout (same tokens, breakpoints, chrome).
 
 ---
 
@@ -255,13 +268,14 @@ widget tests over a fake gateway + real ConversationState).
 - [x] Local notifications (task / off-peak / automation channels + tap deep-link)
 - [x] Native conversation page (V4: streaming, tools, diffs, queue, interactions, attachments, model switching)
 - [x] Official-mobile-layout task list (workspace cards + phase pills)
-- [ ] Screenshots + demo GIF in the README
-- [ ] Clipboard detection — offer to add when a remote URL is copied
-- [ ] Drag-to-reorder and pin devices
-- [ ] Per-device `theme=dark|light` URL parameter
-- [ ] Home-screen quick-open widget (Android)
-- [ ] iOS artifacts in the release workflow
-- [ ] Play Store / App Store release
+- [x] Screenshots + demo GIF in the README
+- [x] Clipboard detection — offer to add when a remote URL is copied
+- [x] Drag-to-reorder and pin devices
+- [x] Per-device `theme=dark|light` URL parameter
+- [x] Home-screen quick-open widget (Android)
+- [x] iOS artifacts in the release workflow (unsigned `Runner.app` zip)
+- [x] Store listing drafts + channel builds (`store/play`, `store/appstore`)
+- [ ] Submit to Play Store / App Store (needs developer accounts — listing copy ready)
 
 ---
 

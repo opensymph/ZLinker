@@ -1,6 +1,8 @@
 import 'dart:async';
 
+import 'package:app_links/app_links.dart';
 import 'package:flutter/material.dart';
+import 'package:home_widget/home_widget.dart';
 
 import 'notifications/notification_service.dart';
 import 'state/device_session.dart';
@@ -10,10 +12,13 @@ import 'state/scheduled_store.dart';
 import 'ui/chat/chat_page.dart';
 import 'ui/devices_page.dart';
 import 'ui/remote_page.dart';
+import 'ui/task_list_page.dart';
 import 'ui/theme.dart';
 import 'ui/ui_settings.dart';
+import 'widgets/home_widget_bridge.dart';
 
 void main() {
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const ZRemoteApp());
 }
 
@@ -45,6 +50,9 @@ class _ZRemoteAppState extends State<ZRemoteApp> {
     deviceLabelOf: (id) =>
         _store.devices.where((d) => d.id == id).firstOrNull?.label ?? id,
   );
+  StreamSubscription? _widgetClickSub;
+  StreamSubscription? _appLinkSub;
+  final _appLinks = AppLinks();
 
   @override
   void initState() {
@@ -52,6 +60,9 @@ class _ZRemoteAppState extends State<ZRemoteApp> {
     _theme.load();
     _ui.load();
     _scheduled.load();
+    unawaited(_store.load().then((_) {
+      HomeWidgetBridge.syncDevices(_store.devices);
+    }));
     // Fire due scheduled messages while the app is alive.
     _scheduler.start();
     // Local notifications: task events ride the sessions stream; off-peak
@@ -61,6 +72,56 @@ class _ZRemoteAppState extends State<ZRemoteApp> {
     _hub.addListener(_syncNotifyHub);
     _syncNotifyHub();
     _notifyHub.start();
+    unawaited(HomeWidgetBridge.init());
+    _listenHomeWidget();
+    _listenAppLinks();
+  }
+
+  void _listenAppLinks() {
+    _appLinks.getInitialLink().then(_openFromWidgetUri);
+    _appLinkSub = _appLinks.uriLinkStream.listen(_openFromWidgetUri);
+  }
+
+  void _listenHomeWidget() {
+    HomeWidget.initiallyLaunchedFromHomeWidget().then((uri) {
+      if (uri != null) _openFromWidgetUri(uri);
+    });
+    _widgetClickSub = HomeWidget.widgetClicked.listen(_openFromWidgetUri);
+  }
+
+  Future<void> _openFromWidgetUri(Uri? uri) async {
+    if (uri == null) return;
+    // zremote://device/<id>  or  /device/<id>
+    final id = uri.host == 'device'
+        ? (uri.pathSegments.isNotEmpty ? uri.pathSegments.first : null)
+        : (uri.pathSegments.length >= 2 && uri.pathSegments.first == 'device'
+            ? uri.pathSegments[1]
+            : null);
+    if (id == null || id.isEmpty) return;
+    if (!_store.loaded) await _store.load();
+    final device = _store.devices.where((d) => d.id == id).firstOrNull;
+    if (device == null) return;
+    await _store.touch(device.id);
+    final session = _hub.ensure(device);
+    final context = _navigatorKey.currentContext;
+    if (context == null || !context.mounted) return;
+    if (_ui.nativeListEnabled && session != null) {
+      await Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => TaskListPage(
+          store: _store,
+          hub: _hub,
+          device: device,
+          theme: _theme,
+        ),
+      ));
+      return;
+    }
+    await _hub.suspend(device.id);
+    if (!context.mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => RemotePage(device: device),
+    ));
+    _hub.scheduleResume(device);
   }
 
   void _syncNotifyHub() {
@@ -107,6 +168,8 @@ class _ZRemoteAppState extends State<ZRemoteApp> {
 
   @override
   void dispose() {
+    _widgetClickSub?.cancel();
+    _appLinkSub?.cancel();
     _notifyHub.dispose();
     _hub.removeListener(_syncNotifyHub);
     _scheduler.dispose();

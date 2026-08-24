@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-08-24
+
+### Added
+
+- **Clipboard offer-to-add**: on resume, if the clipboard holds a remote
+  URL that is not already saved, a snackbar offers to add it.
+- **Drag-to-reorder + pin devices**: `ReorderableListView` with drag
+  handles; pin/unpin from the overflow menu (pinned float to the top).
+- **Per-device `theme=dark|light`**: URL parameter already parsed; opening
+  a device now wraps the route in the matching theme and injects `theme=`
+  into the WebView launch URL.
+- **Android home-screen widget**: quick-open up to three devices via
+  `zremote://device/<id>` (`ZRemoteWidgetProvider` + `home_widget` /
+  `app_links`).
+- **iOS unsigned artifact** in the Release workflow (`macos-latest`,
+  `flutter build ios --no-codesign`, zip uploaded alongside the APK).
+- **Store listing drafts** under `store/play/` and `store/appstore/`.
+- **README screenshots + demo GIF** (`docs/screenshots/`).
+
 ## [1.4.0] - 2026-08-24
 
 ### Added

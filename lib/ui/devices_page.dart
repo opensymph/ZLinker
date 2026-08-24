@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../protocol/connection_params.dart';
 import '../state/device_session.dart';
 import '../state/device_store.dart';
 import '../state/scheduled_store.dart';
+import '../widgets/home_widget_bridge.dart';
 import 'qr_scan_page.dart';
 import 'remote_page.dart';
 import 'scheduled_page.dart';
@@ -14,8 +16,8 @@ import 'theme.dart';
 import 'ui_settings.dart';
 
 /// Home: the device list with live native status. Tap a card to open the
-/// official web remote page (native connection suspended for the handover),
-/// long-term management via the overflow menu.
+/// native task list (or WebView fallback), long-term management via the
+/// overflow menu. Supports clipboard offer-to-add, drag-reorder and pin.
 class DevicesPage extends StatefulWidget {
   final DeviceStore store;
   final ThemeController theme;
@@ -35,20 +37,48 @@ class DevicesPage extends StatefulWidget {
   State<DevicesPage> createState() => _DevicesPageState();
 }
 
-class _DevicesPageState extends State<DevicesPage> {
+class _DevicesPageState extends State<DevicesPage>
+    with WidgetsBindingObserver {
+  /// Last clipboard URL we already offered (or the user dismissed) so we
+  /// don't spam the snackbar on every resume.
+  String? _clipboardHandled;
+
   @override
   void initState() {
     super.initState();
-    widget.store.load();
-    widget.store.addListener(_syncConnections);
+    WidgetsBinding.instance.addObserver(this);
+    widget.store.load().then((_) {
+      _syncConnections();
+      _syncHomeWidget();
+      _checkClipboard();
+    });
+    widget.store.addListener(_onStoreChanged);
     widget.ui.addListener(_syncConnections);
   }
 
   @override
   void dispose() {
-    widget.store.removeListener(_syncConnections);
+    WidgetsBinding.instance.removeObserver(this);
+    widget.store.removeListener(_onStoreChanged);
     widget.ui.removeListener(_syncConnections);
     super.dispose();
+  }
+
+  void _onStoreChanged() {
+    _syncConnections();
+    _syncHomeWidget();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _checkClipboard();
+      _syncHomeWidget();
+    }
+  }
+
+  void _syncHomeWidget() {
+    HomeWidgetBridge.syncDevices(widget.store.devices);
   }
 
   /// Keeps native connections in step with the device list and the
@@ -56,6 +86,46 @@ class _DevicesPageState extends State<DevicesPage> {
   void _syncConnections() {
     if (!widget.store.loaded || !mounted) return;
     widget.hub.syncWith(widget.store.devices);
+  }
+
+  /// On resume / first load: if the clipboard holds a remote URL that is
+  /// not already saved, offer to add it.
+  Future<void> _checkClipboard() async {
+    if (!mounted) return;
+    // Widget tests have no clipboard channel — skip to avoid pending timers.
+    final bindingName = WidgetsBinding.instance.runtimeType.toString();
+    if (bindingName.contains('TestWidgetsFlutterBinding') ||
+        bindingName.contains('AutomatedTest')) {
+      return;
+    }
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      if (text.isEmpty || text == _clipboardHandled) return;
+      if (RemoteConnectionParams.parse(text) == null) return;
+      if (widget.store.devices.any((d) => d.url == text)) {
+        _clipboardHandled = text;
+        return;
+      }
+      _clipboardHandled = text;
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.of(context);
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 8),
+          content: Text(tr(context, 'devices.clipboard.offer')),
+          action: SnackBarAction(
+            label: tr(context, 'devices.clipboard.add'),
+            onPressed: () async {
+              await widget.store.addUrl(text);
+            },
+          ),
+        ),
+      );
+    } catch (_) {
+      // Clipboard access can fail on some platforms / permissions / tests.
+    }
   }
 
   /// Card tap: native task list when the protocol link is healthy, the
@@ -67,11 +137,14 @@ class _DevicesPageState extends State<DevicesPage> {
         session.status != DeviceStatus.error) {
       if (!mounted) return;
       await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => TaskListPage(
-          store: widget.store,
-          hub: widget.hub,
-          device: device,
-          theme: widget.theme,
+        builder: (_) => _deviceThemeWrap(
+          device,
+          TaskListPage(
+            store: widget.store,
+            hub: widget.hub,
+            device: device,
+            theme: widget.theme,
+          ),
         ),
       ));
       return;
@@ -79,15 +152,28 @@ class _DevicesPageState extends State<DevicesPage> {
     await _openRemote(device);
   }
 
+  /// Applies the device URL's `theme=dark|light` for the opened route.
+  Widget _deviceThemeWrap(Device device, Widget child) {
+    final hint = device.themeHint;
+    if (hint == null) return child;
+    final data = hint == ThemeModeHint.dark
+        ? buildDarkTheme()
+        : buildLightTheme();
+    return Theme(data: data, child: child);
+  }
+
   /// Opens the in-app WebView remote page. The native connection is
   /// suspended first (one terminal per device) and resumes ~1s after the
-  /// page pops.
+  /// page pops. Injects `theme=` from the URL when present.
   Future<void> _openRemote(Device device) async {
     await widget.store.touch(device.id);
     await widget.hub.suspend(device.id);
     if (!mounted) return;
     await Navigator.of(context).push(MaterialPageRoute(
-      builder: (_) => RemotePage(device: device),
+      builder: (_) => _deviceThemeWrap(
+        device,
+        RemotePage(device: device),
+      ),
     ));
     widget.hub.scheduleResume(device);
   }
@@ -340,11 +426,31 @@ class _DevicesPageState extends State<DevicesPage> {
           if (devices.isEmpty) return _emptyState(context);
           return RefreshIndicator(
             onRefresh: () async => _syncConnections(),
-            child: ListView.separated(
+            child: ReorderableListView.builder(
               padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
               itemCount: devices.length,
-              separatorBuilder: (_, _) => const SizedBox(height: 8),
-              itemBuilder: (context, i) => _deviceCard(devices[i]),
+              proxyDecorator: (child, index, animation) {
+                return AnimatedBuilder(
+                  animation: animation,
+                  builder: (context, _) => Material(
+                    elevation: 2 + animation.value * 4,
+                    color: Colors.transparent,
+                    borderRadius: BorderRadius.circular(12),
+                    child: child,
+                  ),
+                );
+              },
+              onReorderItem: (oldIndex, newIndex) {
+                widget.store.reorder(oldIndex, newIndex);
+              },
+              itemBuilder: (context, i) {
+                final d = devices[i];
+                return Padding(
+                  key: ValueKey(d.id),
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: _deviceCard(d),
+                );
+              },
             ),
           );
         },
@@ -396,12 +502,23 @@ class _DevicesPageState extends State<DevicesPage> {
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
           child: ListTile(
-            leading: _deviceLeading(context, session),
-            title: Text(
-              device.label,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
+            leading: _deviceLeading(context, session, device.pinned),
+            title: Row(
+              children: [
+                if (device.pinned) ...[
+                  Icon(Icons.push_pin, size: 14, color: ZInk.muted(context)),
+                  const SizedBox(width: 4),
+                ],
+                Expanded(
+                  child: Text(
+                    device.label,
+                    style: const TextStyle(
+                        fontSize: 15, fontWeight: FontWeight.w600),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
             ),
             subtitle: Padding(
               padding: const EdgeInsets.only(top: 4),
@@ -428,10 +545,15 @@ class _DevicesPageState extends State<DevicesPage> {
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Icon(Icons.chevron_right, color: ZInk.ghost(context)),
+                ReorderableDragStartListener(
+                  index: widget.store.devices.indexWhere((d) => d.id == device.id),
+                  child: Icon(Icons.drag_handle, color: ZInk.ghost(context)),
+                ),
                 PopupMenuButton<String>(
                   onSelected: (v) {
                     switch (v) {
+                      case 'pin':
+                        widget.store.setPinned(device.id, !device.pinned);
                       case 'rename':
                         _rename(device);
                       case 'web':
@@ -445,6 +567,13 @@ class _DevicesPageState extends State<DevicesPage> {
                     }
                   },
                   itemBuilder: (c) => [
+                    PopupMenuItem(
+                        value: 'pin',
+                        child: Text(tr(
+                            context,
+                            device.pinned
+                                ? 'devices.menu.unpin'
+                                : 'devices.menu.pin'))),
                     PopupMenuItem(
                         value: 'rename',
                         child: Text(tr(context, 'devices.menu.rename'))),
@@ -473,7 +602,8 @@ class _DevicesPageState extends State<DevicesPage> {
   }
 
   /// Device avatar with a live status dot and a running-task badge.
-  Widget _deviceLeading(BuildContext context, DeviceSession? session) {
+  Widget _deviceLeading(
+      BuildContext context, DeviceSession? session, bool pinned) {
     final running = session?.runningTaskCount ?? 0;
     final dotColor = switch (session?.status) {
       DeviceStatus.connected => ZColors.success,
@@ -491,8 +621,11 @@ class _DevicesPageState extends State<DevicesPage> {
             color: ZColors.sky500.withValues(alpha: 0.12),
             borderRadius: BorderRadius.circular(10),
           ),
-          child: const Icon(Icons.desktop_windows_outlined,
-              size: 22, color: ZColors.sky500),
+          child: Icon(
+            pinned ? Icons.push_pin_outlined : Icons.desktop_windows_outlined,
+            size: 22,
+            color: ZColors.sky500,
+          ),
         ),
         Positioned(
           right: -1,
@@ -548,8 +681,6 @@ class _DevicesPageState extends State<DevicesPage> {
           : (tr(context, 'status.error'), ZColors.danger),
       _ => (tr(context, 'status.offline'), ZInk.ghost(context)),
     };
-    return Text(text,
-        style: TextStyle(
-            fontSize: 11, fontWeight: FontWeight.w500, color: color));
+    return Text(text, style: TextStyle(fontSize: 12, color: color));
   }
 }

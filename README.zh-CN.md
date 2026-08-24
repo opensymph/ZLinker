@@ -60,7 +60,7 @@ App 照常能用。
 
 | | |
 |---|---|
-| 📋 **设备列表** | 卡片展示设备名 / 主机 / 上次使用时间 / 在线状态点 / 运行任务徽标;重命名、删除、复制链接、浏览器打开;设备备份 JSON 导出 / 导入 |
+| 📋 **设备列表** | 卡片展示设备名 / 主机 / 上次使用时间 / 在线状态点 / 运行任务徽标;拖拽排序、置顶;重命名、删除、复制链接、浏览器打开;剪贴板提示添加;设备备份 JSON 导出 / 导入 |
 | ➕ **扫码 / 粘贴 / 截图添加** | 相机扫码(`mobile_scanner`)、纯 Dart 相册识码(`zxing2`)、粘贴链接;自动去重;无法解析的链接照样保存,绝不丢 |
 | 📊 **原生任务列表** | 官方移动端布局:工作区卡片(本地徽标、路径、更新时间、任务数)、带状态药丸的任务行(运行中转圈 / ✓ / 失败)、相对时间、当前任务高亮;常显连接状态横幅;置顶分组;长按任务弹底部操作菜单(停止 / 暂停 / 恢复);收起全部 / 整理 / 刷新;≥768dp 双栏(264dp 侧栏 + 内嵌对话) |
 | 💬 **原生对话** | 完整 Conversation V4:分组 turn 流式 markdown、思考过程折叠、工具摘要 + diff、文件变更条(可撤销)、反馈(👍/👎/分叉)、交互确认(权限与问题)、排队消息与自动发送、模型 / 模式 / 思考 / 后续消息切换、附件、斜杠命令 + `$Skills`、用量环、上下文条、历史翻页、被接管遮罩、长按操作(重试 / 编辑重发 / 分叉 / 回滚) |
@@ -84,7 +84,20 @@ App 照常能用。
 
 ## 📸 截图
 
-随首个正式 Release 补上。想帮忙拍?见[贡献指南](#-贡献)。
+<p align="center">
+  <img src="docs/screenshots/01-list-mobile.png" width="240" alt="手机任务列表" />
+  <img src="docs/screenshots/02-chat-mobile.png" width="240" alt="手机对话" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/03-dual-pane.png" width="720" alt="桌面双栏" />
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/demo.gif" width="320" alt="ZRemote 演示" />
+</p>
+
+手机列表 → 对话,以及 ≥768dp 的 IDE 侧栏 + 对话区。原生 UI 对齐官方远程控制布局(同一套 token、断点与结构)。
 
 ---
 
@@ -229,13 +242,14 @@ gateway + 真 ConversationState 的对话页 widget 测试)。
 - [x] 本地通知(任务 / 闲时 / 自动化三渠道 + 点击直达)
 - [x] 原生对话页(V4:流式、工具、diff、排队、交互、附件、模型切换)
 - [x] 官方移动端布局任务列表(工作区卡片 + 状态药丸)
-- [ ] README 截图 + 演示 GIF
-- [ ] 剪贴板检测 —— 复制远程链接后自动提示添加
-- [ ] 拖拽排序 + 置顶设备
-- [ ] 每设备 `theme=dark|light` URL 参数
-- [ ] 桌面快捷打开小组件(Android)
-- [ ] Release 工作流产出 iOS 产物
-- [ ] Play 商店 / App Store 上架
+- [x] README 截图 + 演示 GIF
+- [x] 剪贴板检测 —— 复制远程链接后自动提示添加
+- [x] 拖拽排序 + 置顶设备
+- [x] 每设备 `theme=dark|light` URL 参数
+- [x] 桌面快捷打开小组件(Android)
+- [x] Release 工作流产出 iOS 产物(未签名 Runner.app zip)
+- [x] 商店上架文案草稿 + 渠道构建(`store/play`、`store/appstore`)
+- [ ] 正式提交 Play / App Store(需开发者账号 — 文案已就绪)
 
 ---
 
