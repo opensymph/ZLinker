@@ -52,6 +52,9 @@ class FakeNotifiableSession extends ChangeNotifier
   late final OffPeakPort offPeak =
       OffPeakPort((m, a) async => offPeakTasks);
 
+  @override
+  Future<List<OffPeakModelChoice>> modelSelectionView() async => const [];
+
   final SessionsIndexState _state = SessionsIndexState();
 
   FakeNotifiableSession(this.deviceId,

@@ -20,6 +20,10 @@ class FakeOffPeakHost implements OffPeakHost {
   final List<(String, List<Object?>)> calls = [];
   Object Function(String method, List<Object?> args)? failWith;
 
+  /// Fixture served by modelSelectionView (the official model-selection
+  /// view); empty = desktop rejected the channel.
+  List<OffPeakModelChoice> modelChoices = const [];
+
   FakeOffPeakHost(
     this.status, {
     this.tasks = const [],
@@ -34,6 +38,9 @@ class FakeOffPeakHost implements OffPeakHost {
 
   @override
   late final OffPeakPort offPeak = OffPeakPort(_call);
+
+  @override
+  Future<List<OffPeakModelChoice>> modelSelectionView() async => modelChoices;
 
   Future<dynamic> _call(String method, List<Object?> args) async {
     final fail = failWith;
@@ -416,5 +423,173 @@ void main() {
     expect(cancel.single.$2, [
       {'offPeakTaskId': 't1'}
     ]);
+  });
+
+  testWidgets('model-selection choices back the picker and the wire carries '
+      'modelSelection', (tester) async {
+    final (store, hub) = await setupDevice();
+    final host = FakeOffPeakHost(DeviceStatus.connected);
+    host.modelChoices = [
+      const OffPeakModelChoice(
+        providerId: 'builtin',
+        modelId: 'glm-5.2',
+        providerName: 'BigModel',
+        name: 'GLM-5.2',
+        reasoningLevels: ['high', 'low'],
+      ),
+      const OffPeakModelChoice(
+        providerId: 'kimi',
+        modelId: 'moonshot-v2',
+        providerName: 'kimi',
+        name: 'Moonshot',
+      ),
+    ];
+
+    await tester.pumpWidget(wrap(OffPeakPage(
+      store: store, hub: hub, device: store.devices.first, hostOverride: host,
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('新建闲时任务'));
+    await tester.pumpAndSettle();
+
+    // Picker opens with the view's models (display name + provider).
+    await tester.tap(find.text('GLM-5.2'));
+    await tester.pumpAndSettle();
+    expect(find.text('Moonshot'), findsOneWidget);
+    expect(find.text('kimi'), findsOneWidget);
+
+    // Switch to Moonshot and pick a reasoning level.
+    await tester.tap(find.text('Moonshot'));
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+        find.widgetWithText(TextField, '任务指令'), '带模型选择的分析');
+    await tester.ensureVisible(find.text('创建闲时任务'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('创建闲时任务'));
+    await tester.pumpAndSettle();
+
+    final submit = host.calls.where((c) => c.$1 == 'run' || c.$1 == 'submit');
+    final wire = submit.single.$2.single as Map<String, dynamic>;
+    expect(wire['modelSelection'], {
+      'providerId': 'kimi',
+      'modelId': 'moonshot-v2',
+    });
+    // Legacy fields dual-write the composite for older desktops.
+    expect(wire['model'], 'kimi/moonshot-v2');
+  });
+
+  testWidgets('editing a run with a stored modelSelection restores and '
+      'submits it', (tester) async {
+    final (store, hub) = await setupDevice();
+    final host = FakeOffPeakHost(DeviceStatus.connected, tasks: [
+      {
+        'offPeakTaskId': 't7',
+        'title': '结构化任务',
+        'prompt': '原始内容',
+        'status': 'queued',
+        'modelSelection': {
+          'providerId': 'kimi',
+          'modelId': 'moonshot-v2',
+          'options': {'reasoningLevel': 'high'},
+        },
+      },
+    ]);
+    host.modelChoices = [
+      const OffPeakModelChoice(
+        providerId: 'kimi',
+        modelId: 'moonshot-v2',
+        providerName: 'kimi',
+        name: 'Moonshot',
+        reasoningLevels: ['high', 'low'],
+      ),
+    ];
+    await tester.pumpWidget(wrap(OffPeakPage(
+      store: store, hub: hub, device: store.devices.first, hostOverride: host,
+    )));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byType(PopupMenuButton<String>));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('编辑'));
+    await tester.pumpAndSettle();
+
+    // Restored from the stored selection (display name, not the composite).
+    expect(find.text('Moonshot'), findsWidgets);
+
+    await tester.ensureVisible(find.text('保存'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('保存'));
+    await tester.pumpAndSettle();
+
+    final updates = host.calls.where((c) => c.$1 == 'updateTask').toList();
+    expect(updates, hasLength(1));
+    final wire = updates.single.$2.single as Map<String, dynamic>;
+    expect(wire['modelSelection'], {
+      'providerId': 'kimi',
+      'modelId': 'moonshot-v2',
+      'options': {'reasoningLevel': 'high'},
+    });
+    expect(wire['model'], 'kimi/moonshot-v2');
+  });
+
+  test('off-peak wire helpers parse and emit the official shapes', () {
+    // View flattening: providers → choices with reasoning levels.
+    final choices = parseModelSelectionView({
+      'revision': 3,
+      'providers': [
+        {
+          'providerId': 'builtin',
+          'providerName': 'BigModel',
+          'models': [
+            {
+              'modelId': 'glm-5.2',
+              'config': {
+                'name': 'GLM-5.2',
+                'optionSpecs': {
+                  'reasoningLevel': {'values': ['max', 'high', 'off']},
+                },
+              },
+            },
+            {'modelId': 'glm-5.2-air'},
+          ],
+        },
+      ],
+    });
+    expect(choices, hasLength(2));
+    expect(choices[0].composite, 'builtin/glm-5.2');
+    expect(choices[0].name, 'GLM-5.2');
+    expect(choices[0].reasoningLevels, ['max', 'high', 'off']);
+    expect(choices[1].name, 'glm-5.2-air');
+
+    // Wire: structured selection + legacy dual-write.
+    final wire = OffPeakSubmitInput(
+      prompt: 'p',
+      workspacePath: '/repo',
+      model: choices[0].composite,
+      thoughtLevel: 'high',
+      modelSelection: choices[0].selection(reasoningLevel: 'high'),
+    ).toWire();
+    expect(wire['modelSelection'], {
+      'providerId': 'builtin',
+      'modelId': 'glm-5.2',
+      'options': {'reasoningLevel': 'high'},
+    });
+    expect(wire['model'], 'builtin/glm-5.2');
+    expect(wire['thoughtLevel'], 'high');
+
+    // Task parsing: stored selection + tolerant legacy fallback.
+    final task = OffPeakTask({
+      'offPeakTaskId': 't',
+      'modelSelection': {
+        'providerId': 'builtin',
+        'modelId': 'glm-5.2',
+        'options': {'reasoningLevel': 'off'},
+      },
+    });
+    expect(task.modelSelection?.composite, 'builtin/glm-5.2');
+    expect(task.modelSelection?.reasoningLevel, 'off');
+    expect(OffPeakTask({'offPeakTaskId': 't2'}).modelSelection, isNull);
   });
 }

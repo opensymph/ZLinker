@@ -680,6 +680,88 @@ class ConversationTransport {
     },
   });
 
+  /// Resume a stopped/failed workflow run (web resumeWorkflowRun; the CLI
+  /// computes the `resumable` bit — the UI never derives it). No
+  /// baseRevision: workflow commands sit outside that set.
+  Future<dynamic> resumeWorkflowRun(
+    String sessionId,
+    String runId, {
+    String? name,
+  }) =>
+      sendCommand(sessionId, 'resumeWorkflowRun', {
+        'workId': runId,
+        if (name != null && name.isNotEmpty) 'name': name,
+      });
+
+  /// Workflow run artifact summaries (web workflowRunArtifacts).
+  Future<dynamic> workflowRunArtifacts(String sessionId, String runId) {
+    return _channels.call(channel, 'conversationWorkflowRunArtifactsV4', [
+      {'sessionId': sessionId, 'runId': runId},
+    ]);
+  }
+
+  /// Preset-board artifact items (web workflowRunArtifactData).
+  Future<dynamic> workflowRunArtifactData(
+    String sessionId,
+    String runId,
+    String artifactId, {
+    int? afterSequence,
+    int limit = 200,
+  }) {
+    return _channels.call(channel, 'conversationWorkflowRunArtifactDataV4', [
+      {
+        'sessionId': sessionId,
+        'runId': runId,
+        'artifactId': artifactId,
+        if (afterSequence != null) 'afterSequence': afterSequence,
+        'limit': limit,
+      },
+    ]);
+  }
+
+  /// One chunk of artifact bytes (web workflowRunArtifactRead; 512KiB
+  /// chunks — loop until nextOffset null, MAX_CHUNKS brake on the caller).
+  Future<dynamic> workflowRunArtifactRead(
+    String sessionId,
+    String runId,
+    String artifactId,
+    String version, {
+    int offset = 0,
+    int limit = 524288,
+  }) {
+    return _channels.call(channel, 'conversationWorkflowRunArtifactReadV4', [
+      {
+        'sessionId': sessionId,
+        'runId': runId,
+        'artifactId': artifactId,
+        'version': version,
+        'offset': offset,
+        'limit': limit,
+      },
+    ]);
+  }
+
+  /// Workspace hook trust review (web respondWorkspaceHookReview). The
+  /// payload of a `workspaceHookReview` interaction carries every target
+  /// field, so the UI passes it through untouched.
+  Future<dynamic> respondWorkspaceHookReview(
+    String sessionId,
+    Map payload,
+    List<String> reviewItemIds,
+  ) => sendCommand(sessionId, 'respondWorkspaceHookReview', {
+    'sessionId': payload['sessionId'],
+    'taskId': payload['taskId'],
+    'runId': payload['runId'],
+    if (payload['remoteSessionId'] != null)
+      'remoteSessionId': payload['remoteSessionId'],
+    'workspaceIdentity': payload['workspaceIdentity'],
+    'bundleDigest': payload['bundleDigest'],
+    'reviewFlowId': payload['reviewFlowId'],
+    'generation': payload['generation'],
+    'interactionId': payload['interactionId'],
+    'decision': {'action': 'trust_selected', 'reviewItemIds': reviewItemIds},
+  });
+
   Future<dynamic> rowsRange(
     String sessionId, {
     int? beforeRowId,
@@ -1376,6 +1458,10 @@ class ConversationState extends ChangeNotifier {
   int seq = 0;
   String? logEpoch;
   int? firstRowId;
+
+  /// 全序第一行 rowId（snapshot.rows.firstRowId，nullable）——window 首行
+  /// 等于它 ⇔ 已到顶。翻页游标是 window[0].rowId，不是这个值。
+  int? storeFirstRowId;
   int totalCount = 0;
   bool ready = false;
 
@@ -1431,11 +1517,18 @@ class ConversationState extends ChangeNotifier {
                 .toList()
           : [];
       totalCount = (rowsObj['totalCount'] as num?)?.toInt() ?? rows.length;
-      firstRowId = (rowsObj['firstRowId'] as num?)?.toInt() ??
-          (rows.isNotEmpty ? (rows.first['rowId'] as num?)?.toInt() : null);
+      // Official semantics (rowsWindowSchema): firstRowId is the FIRST row
+      // of the whole store ("window 首行等于它 ⇔ 已到顶"); the pagination
+      // cursor is the window's first row (web conversationProjectionStore
+      // loadOlder uses snapshot.rows.window[0].rowId).
+      storeFirstRowId = (rowsObj['firstRowId'] as num?)?.toInt();
+      firstRowId = rows.isNotEmpty
+          ? (rows.first['rowId'] as num?)?.toInt()
+          : null;
     } else {
       rows = [];
       totalCount = 0;
+      storeFirstRowId = null;
       firstRowId = null;
     }
   }
@@ -1465,12 +1558,10 @@ class ConversationState extends ChangeNotifier {
             .toList();
         final removed = rows.length - kept.length;
         rows = kept;
-        if (firstRowId != null && fromRowId <= firstRowId!) {
-          totalCount = 0;
-          firstRowId = null;
-        } else {
-          totalCount = (totalCount - removed).clamp(0, 1 << 31);
-        }
+        firstRowId = rows.isNotEmpty
+            ? (rows.first['rowId'] as num?)?.toInt()
+            : null;
+        totalCount = (totalCount - removed).clamp(0, 1 << 31);
         break;
       case 'row.delta':
         final rowId = (delta['rowId'] as num?)?.toInt();
@@ -1620,8 +1711,14 @@ class ConversationState extends ChangeNotifier {
   /// `hasMore` (web parity) once known; falls back to the totalCount
   /// heuristic for the initial state.
   bool get canLoadOlder {
-    if (firstRowId == null) return false;
-    if (hasMore != null) return hasMore! && rows.isNotEmpty;
+    if (rows.isEmpty) return false;
+    if (hasMore != null) return hasMore!;
+    // At-top detection (official): window first == store first ⇔ no older
+    // rows. Without the store anchor fall back to the totalCount heuristic.
+    if (storeFirstRowId != null) {
+      final windowFirst = (rows.first['rowId'] as num?)?.toInt();
+      return windowFirst != storeFirstRowId;
+    }
     return totalCount > rows.length;
   }
 

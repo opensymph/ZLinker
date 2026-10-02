@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:zlinker/ui/chat/chat_page.dart';
+import 'package:zlinker/ui/chat/chat_message_list.dart';
 
 void main() {
   Map<String, dynamic> tool(String name, {String status = 'completed'}) => {

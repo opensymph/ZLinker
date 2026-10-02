@@ -24,6 +24,10 @@ class ModelOptionField extends StatefulWidget {
   /// availability payload's `allowedModels` (plain model names).
   final List<String>? directValues;
 
+  /// Rich direct options (name + subtitle per value) — wins over
+  /// [directValues]: e.g. the model-selection view's provider/model pairs.
+  final List<({String value, String name, String? subtitle})>? directOptions;
+
   /// Desktop off-peak behavior: no "unspecified" row — the field defaults
   /// to the first option instead.
   final bool defaultToFirst;
@@ -37,6 +41,7 @@ class ModelOptionField extends StatefulWidget {
     required this.value,
     required this.onChanged,
     this.directValues,
+    this.directOptions,
     this.defaultToFirst = false,
   });
 
@@ -58,7 +63,9 @@ class _ModelOptionFieldState extends State<ModelOptionField> {
   }
 
   Future<void> _load() {
-    if (widget.directValues != null || widget.loadOptions == null) {
+    if (widget.directOptions != null ||
+        widget.directValues != null ||
+        widget.loadOptions == null) {
       return Future.value();
     }
     setState(() {
@@ -76,9 +83,11 @@ class _ModelOptionFieldState extends State<ModelOptionField> {
 
   ConfigOption? get _option => _prep?.option(widget.optionId);
 
-  /// Display-shape options: direct values win (no provider subtitle),
-  /// else the config option's values.
+  /// Display-shape options: rich direct options win, then plain direct
+  /// values (no provider subtitle), else the config option's values.
   List<({String value, String name, String? subtitle})> get _options {
+    final rich = widget.directOptions;
+    if (rich != null) return rich;
     final direct = widget.directValues;
     if (direct != null) {
       return [for (final v in direct) (value: v, name: v, subtitle: null)];

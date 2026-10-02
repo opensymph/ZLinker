@@ -41,6 +41,10 @@ class _OffPeakPageState extends State<OffPeakPage>
 
   List<OffPeakTask> _tasks = const [];
   OffPeakStatus? _status;
+
+  /// Official model-selection view (providers/models) backing the form's
+  /// model picker; empty when the desktop doesn't serve it.
+  List<OffPeakModelChoice> _modelChoices = const [];
   bool _loading = true;
   String? _error;
   bool _busy = false;
@@ -80,10 +84,14 @@ class _OffPeakPageState extends State<OffPeakPage>
       final tasks = await session.offPeak.list();
       unawaited(session.offPeak.wake());
       final status = await session.offPeak.status();
+      // Best-effort: the picker falls back to prepareWorkspace when the
+      // desktop rejects the model-selection channel.
+      final choices = await session.modelSelectionView();
       if (!mounted) return;
       setState(() {
         _tasks = tasks;
         _status = status;
+        if (choices.isNotEmpty) _modelChoices = choices;
         _loading = false;
         _error = null;
       });
@@ -153,9 +161,9 @@ class _OffPeakPageState extends State<OffPeakPage>
       _toast(tr(context, 'op.unavailable.title'));
       return;
     }
-    // Desktop parity: model options come from the availability payload's
-    // allowedModels (prepareWorkspace stays the fallback); thought options
-    // come from allowedModelConfigs[].reasoning.
+    // Desktop parity: model options come from the official model-selection
+    // view (prepareWorkspace stays the fallback); thought options come from
+    // the selected model's reasoning levels.
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
@@ -166,6 +174,7 @@ class _OffPeakPageState extends State<OffPeakPage>
             session is DeviceSession ? session.prepareWorkspace : null,
         allowedModels: _allowedModels.isEmpty ? null : _allowedModels,
         allowedModelConfigs: _allowedModelConfigs,
+        modelChoices: _modelChoices,
       ),
     );
     await _load();
@@ -803,6 +812,12 @@ class OffPeakSheet extends StatefulWidget {
   /// Desktop `allowedModelConfigs` entries: `{model?, reasoning:
   /// {levels, defaultLevel}}` — drives the thought-level selector.
   final List<Map<String, dynamic>> allowedModelConfigs;
+
+  /// Official model-selection choices (`model-selection` getView). When
+  /// non-empty these back the model picker (composite `provider/model`
+  /// values) and the submission carries the structured `modelSelection`.
+  final List<OffPeakModelChoice> modelChoices;
+
   const OffPeakSheet({
     super.key,
     required this.session,
@@ -810,6 +825,7 @@ class OffPeakSheet extends StatefulWidget {
     this.loadOptions,
     this.allowedModels,
     this.allowedModelConfigs = const [],
+    this.modelChoices = const [],
   });
 
   @override
@@ -819,6 +835,11 @@ class OffPeakSheet extends StatefulWidget {
 class _OffPeakSheetState extends State<OffPeakSheet> {
   late final TextEditingController _title;
   late final TextEditingController _prompt;
+
+  /// Structured selection (modelChoices path); composite `provider/model`.
+  OffPeakModelChoice? _choice;
+
+  /// Legacy plain-model selection (allowedModels/prepareWorkspace path).
   String? _model;
   String? _thought;
   DateTime? _earliest;
@@ -834,7 +855,7 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
   bool get _dirty =>
       _pristine['title'] != _title.text.trim() ||
       _pristine['prompt'] != _prompt.text.trim() ||
-      _pristine['model'] != _effectiveModel ||
+      _pristine['model'] != _effectiveModelValue ||
       _pristine['thought'] != _thought ||
       _pristine['earliest'] != null ||
       _pristine['permission'] != _permission;
@@ -851,23 +872,76 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
     final e = widget.editing;
     _title = TextEditingController(text: e?.title ?? '');
     _prompt = TextEditingController(text: e?.prompt ?? '');
-    _model = (e?.model == null || (e?.model ?? '').isEmpty) ? null : e!.model;
-    if (_model != null &&
-        widget.allowedModels != null &&
-        !widget.allowedModels!.contains(_model)) {
-      // Keep showing a stored model that left today's allowlist.
-      _modelExtraValue = _model;
+    // Structured restore wins (desktop modelSelection contract); legacy
+    // plain model strings stay on the old path.
+    final stored = e?.modelSelection;
+    if (stored != null) {
+      _choice = _choiceFor(stored.providerId, stored.modelId) ??
+          OffPeakModelChoice(
+            providerId: stored.providerId,
+            modelId: stored.modelId,
+            name: stored.modelId,
+            reasoningLevels: stored.reasoningLevel == null
+                ? const []
+                : [stored.reasoningLevel!],
+          );
+      if (stored.reasoningLevel != null) _thought = stored.reasoningLevel;
+    } else {
+      _model = (e?.model == null || (e?.model ?? '').isEmpty) ? null : e!.model;
+      if (_model != null &&
+          widget.allowedModels != null &&
+          !widget.allowedModels!.contains(_model)) {
+        // Keep showing a stored model that left today's allowlist.
+        _modelExtraValue = _model;
+      }
+      if (widget.modelChoices.isNotEmpty && _model != null) {
+        // A legacy `provider/model` composite can still map onto the view.
+        final slash = _model!.indexOf('/');
+        if (slash > 0) {
+          _choice = _choiceFor(
+            _model!.substring(0, slash),
+            _model!.substring(slash + 1),
+          );
+          if (_choice != null) _modelExtraValue = null;
+        }
+      }
     }
-    _thought = e?.raw['thoughtLevel'] as String?;
+    _thought ??= e?.raw['thoughtLevel'] as String?;
     _permission = e?.permissionMode ?? 'build';
     _pristine = {
       'title': _title.text.trim(),
       'prompt': _prompt.text.trim(),
-      'model': _effectiveModel,
+      'model': _effectiveModelValue,
       'thought': _thought,
       'earliest': null,
       'permission': _permission,
     };
+  }
+
+  /// Choice for a provider/model pair in today's view; null when absent.
+  OffPeakModelChoice? _choiceFor(String providerId, String modelId) {
+    for (final c in widget.modelChoices) {
+      if (c.providerId == providerId && c.modelId == modelId) return c;
+    }
+    return null;
+  }
+
+  /// The picker's current value: structured composite, else the legacy
+  /// plain model (kept selectable via _modelExtraValue).
+  String? get _effectiveModelValue =>
+      _choice?.composite ?? (_model ?? _modelExtraValue);
+
+  /// Effective structured selection for the wire: the picked choice, or —
+  /// for a fresh form the user left untouched — the first available choice
+  /// (desktop picks allowedModels[0]).
+  OffPeakModelChoice? get _effectiveChoice {
+    if (_choice != null) return _choice;
+    if (widget.editing == null &&
+        _model == null &&
+        widget.modelChoices.isNotEmpty) {
+      return widget.modelChoices.first;
+    }
+    return null;
   }
 
   @override
@@ -880,9 +954,14 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
   /// Effective selection sent on the wire.
   String? get _effectiveModel => _model ?? _modelExtraValue;
 
-  /// Thought levels for the selected model — matching allowedModelConfig's
-  /// reasoning block, else one global entry when exactly one exists.
+  /// Thought levels for the selected model: the model-selection view's
+  /// reasoning levels first (official resolveModelThoughtOption source),
+  /// then allowedModelConfig's reasoning block.
   List<String> get _thoughtLevels {
+    final choice = _effectiveChoice;
+    if (choice != null && choice.reasoningLevels.isNotEmpty) {
+      return choice.reasoningLevels;
+    }
     final configs = widget.allowedModelConfigs;
     if (configs.isEmpty) return const [];
     var scope = const <Map<String, dynamic>>[];
@@ -890,7 +969,9 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
     if (model != null && model.isNotEmpty) {
       scope = [
         for (final c in configs)
-          if ('${c['model'] ?? ''}' == model) c.cast<String, dynamic>(),
+          if ('${c['model'] ?? ''}' == model ||
+              '${c['model'] ?? ''}' == choice?.composite)
+            c.cast<String, dynamic>(),
       ];
     }
     if (scope.isEmpty && configs.length == 1) scope = configs;
@@ -958,6 +1039,8 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
     }
     setState(() => _submitting = true);
     try {
+      final choice = _effectiveChoice;
+      final legacyModel = choice?.composite ?? _effectiveModel;
       final e = widget.editing;
       if (e != null) {
         await widget.session.offPeak.update(
@@ -966,8 +1049,9 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
             title: _title.text,
             prompt: _prompt.text,
             permissionMode: _permission,
-            model: _effectiveModel,
+            model: legacyModel,
             thoughtLevel: _thought,
+            modelSelection: choice?.selection(reasoningLevel: _thought),
           ),
         );
         if (!mounted) return;
@@ -991,8 +1075,9 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
         workspacePath: workspacePath,
         workspaceIdentity: scope['workspaceIdentity'] as String?,
         permissionMode: _permission,
-        model: _effectiveModel,
+        model: legacyModel,
         thoughtLevel: _thought,
+        modelSelection: choice?.selection(reasoningLevel: _thought),
         earliestAtMs: _earliest?.millisecondsSinceEpoch,
         title: _title.text.trim().isEmpty ? null : _title.text.trim(),
       ));
@@ -1082,10 +1167,22 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
               const SizedBox(height: 10),
               ModelOptionField(
                 loadOptions: widget.loadOptions,
-                // Null keeps the prepareWorkspace fallback alive when no
-                // allowlist arrived from the availability payload.
-                directValues: (widget.allowedModels == null &&
-                        _modelExtraValue == null)
+                // Rich options from the official model-selection view win;
+                // null direct lists keep the prepareWorkspace fallback alive
+                // when neither the view nor an allowlist arrived.
+                directOptions: widget.modelChoices.isEmpty
+                    ? null
+                    : [
+                        for (final c in widget.modelChoices)
+                          (
+                            value: c.composite,
+                            name: c.name,
+                            subtitle: c.providerName,
+                          ),
+                      ],
+                directValues: (widget.modelChoices.isNotEmpty ||
+                        (widget.allowedModels == null &&
+                            _modelExtraValue == null))
                     ? null
                     : [
                         ...?widget.allowedModels,
@@ -1099,9 +1196,21 @@ class _OffPeakSheetState extends State<OffPeakSheet> {
                 // Desktop off-peak form: no unspecified choice — first
                 // allowed model is the default.
                 noneLabel: null,
-                defaultToFirst: !editing && _modelExtraValue == null,
-                value: _effectiveModel,
+                defaultToFirst:
+                    !editing && _modelExtraValue == null && _choice == null,
+                value: _effectiveModelValue,
                 onChanged: (v) => setState(() {
+                  if (v != null) {
+                    final slash = v.indexOf('/');
+                    if (slash > 0) {
+                      _choice = _choiceFor(
+                        v.substring(0, slash),
+                        v.substring(slash + 1),
+                      );
+                    }
+                  } else {
+                    _choice = null;
+                  }
                   _model = v;
                   _modelExtraValue = null;
                   if (!thoughts.contains(_thought)) _thought = null;

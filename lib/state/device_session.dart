@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:clock/clock.dart';
 import 'package:flutter/foundation.dart';
@@ -121,6 +122,11 @@ abstract interface class OffPeakHost {
 
   /// `workspacePath` (+ identity) of the active workspace for submissions.
   Map<String, dynamic> get offPeakScope;
+
+  /// Official model-selection view backing the form's model picker
+  /// (`model-selection` getView); empty when unavailable — the form then
+  /// falls back to prepareWorkspace options.
+  Future<List<OffPeakModelChoice>> modelSelectionView();
 }
 
 /// A device link the notification hub can observe: live task phases plus
@@ -227,6 +233,42 @@ abstract interface class ChatGateway implements Listenable {
     String? action,
     Map<String, dynamic>? content,
   });
+
+  /// Trusts the selected workspace hooks (web respondWorkspaceHookReview;
+  /// the interaction payload carries the full command target).
+  Future<dynamic> respondWorkspaceHookReview(
+    String sessionId,
+    Map payload,
+    List<String> reviewItemIds,
+  );
+
+  /// Coding-plan entitlement snapshot (usage-stats bridge channel) backing
+  /// the session quota banner. Returns null when the desktop rejects it.
+  Future<Map<String, dynamic>?> usageEntitlement();
+
+  /// Resumes a stopped/failed workflow run (workId ≡ runId; the CLI's
+  /// `resumable` bit gates the button, the command can still be rejected).
+  Future<dynamic> resumeWorkflowRun(String sessionId, String runId,
+      {String? name});
+
+  /// Workflow run artifact summaries (web workflowRunArtifacts); empty
+  /// when the desktop rejects the call.
+  Future<List<Map<String, dynamic>>> runArtifacts(String sessionId, String runId);
+
+  /// Preset-board items (web workflowRunArtifactData).
+  Future<List<Map<String, dynamic>>> runArtifactData(
+    String sessionId,
+    String runId,
+    String artifactId,
+  );
+
+  /// Full artifact bytes, chunked over workflowRunArtifactRead (512KiB per
+  /// chunk, bounded); null when the desktop rejects the call.
+  Future<({Uint8List bytes, String? mediaType})?> runArtifactBytes(
+    String sessionId,
+    String runId,
+    Map<String, dynamic> artifact,
+  );
 
   Future<dynamic> rowsRange(String sessionId, {int? beforeRowId, int limit});
 
@@ -953,6 +995,20 @@ class DeviceSession extends ChangeNotifier
     (method, args) => callChannel('off-peak-task', method, args),
   );
 
+  /// Official model-selection view (`model-selection` channel, getView):
+  /// the provider/model list backing the off-peak form's model picker.
+  /// Empty when the desktop rejects the call (older builds) — the form then
+  /// falls back to prepareWorkspace options.
+  @override
+  Future<List<OffPeakModelChoice>> modelSelectionView() async {
+    try {
+      final res = await callChannel('model-selection', 'getView', []);
+      return parseModelSelectionView(res);
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// Workspace scope (workspacePath/identity) for off-peak submissions and
   /// automation run-now triggers.
   @override
@@ -1188,6 +1244,121 @@ class DeviceSession extends ChangeNotifier
     action: action,
     content: content,
   );
+
+  @override
+  Future<dynamic> respondWorkspaceHookReview(
+    String sessionId,
+    Map payload,
+    List<String> reviewItemIds,
+  ) => _requireConversation.respondWorkspaceHookReview(
+    sessionId,
+    payload,
+    reviewItemIds,
+  );
+
+  @override
+  Future<dynamic> resumeWorkflowRun(String sessionId, String runId,
+          {String? name}) =>
+      _requireConversation
+          .resumeWorkflowRun(sessionId, runId, name: name);
+
+  @override
+  Future<List<Map<String, dynamic>>> runArtifacts(
+      String sessionId, String runId) async {
+    try {
+      final res = await callChannel(
+          'zcode-agent', 'conversationWorkflowRunArtifactsV4', [
+        {'sessionId': sessionId, 'runId': runId},
+      ]);
+      if (res is Map && res['artifacts'] is List) {
+        return [
+          for (final a in res['artifacts'] as List)
+            if (a is Map) a.cast<String, dynamic>(),
+        ];
+      }
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> runArtifactData(
+    String sessionId,
+    String runId,
+    String artifactId,
+  ) async {
+    try {
+      final res = await callChannel(
+          'zcode-agent', 'conversationWorkflowRunArtifactDataV4', [
+        {'sessionId': sessionId, 'runId': runId, 'artifactId': artifactId},
+      ]);
+      if (res is Map && res['items'] is List) {
+        return [
+          for (final item in res['items'] as List)
+            if (item is Map) item.cast<String, dynamic>(),
+        ];
+      }
+      return const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<({Uint8List bytes, String? mediaType})?> runArtifactBytes(
+    String sessionId,
+    String runId,
+    Map<String, dynamic> artifact,
+  ) async {
+    final artifactId = '${artifact['id'] ?? ''}';
+    final version = '${artifact['version'] ?? ''}';
+    if (artifactId.isEmpty || version.isEmpty) return null;
+    try {
+      final chunks = <int>[];
+      String? mediaType;
+      var offset = 0;
+      for (var brake = 0; brake < 96; brake++) {
+        final res = await callChannel(
+            'zcode-agent', 'conversationWorkflowRunArtifactReadV4', [
+          {
+            'sessionId': sessionId,
+            'runId': runId,
+            'artifactId': artifactId,
+            'version': version,
+            'offset': offset,
+            'limit': 524288,
+          },
+        ]);
+        if (res is! Map) return null;
+        mediaType ??= res['mediaType'] as String?;
+        final data = res['dataBase64'] as String?;
+        if (data != null && data.isNotEmpty) chunks.addAll(base64.decode(data));
+        final next = (res['nextOffset'] as num?)?.toInt();
+        if (next == null || next <= offset) break;
+        offset = next;
+      }
+      return (bytes: Uint8List.fromList(chunks), mediaType: mediaType);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<Map<String, dynamic>?> usageEntitlement() async {
+    try {
+      final res = await callChannel(
+        'usage-stats',
+        'getEntitlementSnapshot',
+        [
+          {'includeSubscription': true},
+        ],
+      );
+      return res is Map ? res.cast<String, dynamic>() : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   @override
   Future<dynamic> rowsRange(

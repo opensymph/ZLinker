@@ -44,13 +44,19 @@ void main() {
     expect(state.canLoadOlder, isTrue);
   });
 
-  test('explicit snapshot firstRowId still wins', () {
+  test('pagination cursor is the window first row; store firstRowId is the '
+      'at-top anchor', () {
+    // Official rowsWindow semantics: firstRowId is the STORE-first row
+    // ("window 首行等于它 ⇔ 已到顶"); the pagination cursor is the window's
+    // first row (web loadOlder sends snapshot.rows.window[0].rowId).
     final state = stateWithWindow(
       window: [row(10), row(11)],
       totalCount: 50,
       firstRowId: 9,
     );
-    expect(state.firstRowId, 9);
+    expect(state.firstRowId, 10);
+    expect(state.storeFirstRowId, 9);
+    expect(state.canLoadOlder, isTrue); // window 10 != store 9
   });
 
   test('rangeEnvelopeMatches guards on logEpoch', () {

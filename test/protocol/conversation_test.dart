@@ -254,12 +254,25 @@ void main() {
       expect(items[0]['queueItemId'], 'q2');
     });
 
-    test('canLoadOlder is true when more rows exist', () {
+    test('canLoadOlder is true when the window has not reached the store '
+        'top', () {
+      // Official rowsWindow semantics: firstRowId is the STORE-first row;
+      // the window is the tail. window[10] != store[1] → older rows exist.
       _injectSnapshot(state, rows: [
         {'rowId': 10, 'kind': 'user', 'text': 'latest'},
-      ], totalCount: 100, firstRowId: 10);
+      ], totalCount: 100, firstRowId: 1);
 
       expect(state.canLoadOlder, isTrue);
+      // Pagination cursor is the window's first row, NOT the store-first.
+      expect(state.firstRowId, 10);
+    });
+
+    test('canLoadOlder is false while a hasMore=false response is known', () {
+      _injectSnapshot(state, rows: [
+        {'rowId': 10, 'kind': 'user', 'text': 'latest'},
+      ], totalCount: 100, firstRowId: 1);
+      state.hasMore = false;
+      expect(state.canLoadOlder, isFalse);
     });
 
     test('canLoadOlder is false when all rows loaded', () {

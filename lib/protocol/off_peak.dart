@@ -200,9 +200,134 @@ class OffPeakPort {
   }
 }
 
+/// Structured model choice (official `modelSelectionSchema`): the desktop
+/// createTask/updateTask contract — tasks without it "不能进入调度" and can
+/// only ever run the default model. [reasoningLevel] rides `options`.
+class OffPeakModelSelection {
+  final String providerId;
+  final String modelId;
+  final String? reasoningLevel;
+
+  const OffPeakModelSelection({
+    required this.providerId,
+    required this.modelId,
+    this.reasoningLevel,
+  });
+
+  /// `providerId/modelId` (picker display/legacy `model` field shape).
+  String get composite => '$providerId/$modelId';
+
+  Map<String, dynamic> toWire() => {
+        'providerId': providerId,
+        'modelId': modelId,
+        if (reasoningLevel != null && reasoningLevel!.isNotEmpty)
+          'options': {'reasoningLevel': reasoningLevel},
+      };
+
+  /// Tolerant parse of a task's stored `modelSelection` map.
+  static OffPeakModelSelection? from(Map? raw) {
+    if (raw == null) return null;
+    final providerId = '${raw['providerId'] ?? ''}'.trim();
+    final modelId = '${raw['modelId'] ?? ''}'.trim();
+    if (providerId.isEmpty || modelId.isEmpty) return null;
+    final options = raw['options'];
+    final level = options is Map ? '${options['reasoningLevel'] ?? ''}' : '';
+    return OffPeakModelSelection(
+      providerId: providerId,
+      modelId: modelId,
+      reasoningLevel: level.isEmpty ? null : level,
+    );
+  }
+}
+
+/// One pickable model parsed from the official `model-selection`
+/// getView payload (`providers[].models[]`, reasoning levels from
+/// `config.optionSpecs.reasoningLevel` — web resolveModelThoughtOption).
+class OffPeakModelChoice {
+  final String providerId;
+  final String modelId;
+  final String providerName;
+
+  /// Registry display name when present, else the bare modelId.
+  final String name;
+  final List<String> reasoningLevels;
+
+  const OffPeakModelChoice({
+    required this.providerId,
+    required this.modelId,
+    this.providerName = '',
+    this.name = '',
+    this.reasoningLevels = const [],
+  });
+
+  String get composite => '$providerId/$modelId';
+
+  OffPeakModelSelection selection({String? reasoningLevel}) =>
+      OffPeakModelSelection(
+        providerId: providerId,
+        modelId: modelId,
+        reasoningLevel: reasoningLevel,
+      );
+}
+
+/// Flattens the official ModelSelectionView into pickable choices (provider
+/// order preserved; one entry per model). Returns empty when the desktop
+/// rejected the call or the payload shape changed.
+List<OffPeakModelChoice> parseModelSelectionView(Object? view) {
+  if (view is! Map) return const [];
+  final providers = view['providers'];
+  if (providers is! List) return const [];
+  final choices = <OffPeakModelChoice>[];
+  for (final provider in providers) {
+    if (provider is! Map) continue;
+    final providerId = '${provider['providerId'] ?? ''}'.trim();
+    if (providerId.isEmpty) continue;
+    final providerName = '${provider['providerName'] ?? providerId}';
+    final models = provider['models'];
+    if (models is! List) continue;
+    for (final model in models) {
+      if (model is! Map) continue;
+      final modelId = '${model['modelId'] ?? ''}'.trim();
+      if (modelId.isEmpty) continue;
+      String name = modelId;
+      final config = model['config'];
+      if (config is Map) {
+        for (final key in const ['displayName', 'name', 'label']) {
+          final v = config[key];
+          if (v is String && v.trim().isNotEmpty) {
+            name = v.trim();
+            break;
+          }
+        }
+      }
+      final levels = <String>[];
+      if (config is Map) {
+        final specs = config['optionSpecs'];
+        final reasoning = specs is Map ? specs['reasoningLevel'] : null;
+        final values = reasoning is Map ? reasoning['values'] : null;
+        if (values is List) {
+          levels.addAll([for (final v in values) '$v']);
+        }
+      }
+      choices.add(OffPeakModelChoice(
+        providerId: providerId,
+        modelId: modelId,
+        providerName: providerName,
+        name: name,
+        reasoningLevels: levels,
+      ));
+    }
+  }
+  return choices;
+}
+
 /// Submit form → wire (`off-peak-run`). Exactly the documented fields;
 /// [earliestAtMs]/[title] ride along as display hints (beyond the
 /// documented schema, ignored by desktops that don't know them).
+///
+/// [modelSelection] is the official createTask contract (structured
+/// provider/model/reasoning); legacy `model`/`thoughtLevel` are dual-written
+/// so older desktops keep working.
 class OffPeakSubmitInput {
   final String prompt;
   final String workspacePath;
@@ -210,6 +335,7 @@ class OffPeakSubmitInput {
   final String permissionMode;
   final String? model;
   final String? thoughtLevel;
+  final OffPeakModelSelection? modelSelection;
   final int? earliestAtMs;
   final String? title;
 
@@ -224,6 +350,7 @@ class OffPeakSubmitInput {
     this.permissionMode = 'build',
     this.model,
     this.thoughtLevel,
+    this.modelSelection,
     this.earliestAtMs,
     this.title,
     String? offPeakTaskId,
@@ -239,6 +366,7 @@ class OffPeakSubmitInput {
         if (model != null && model!.isNotEmpty) 'model': model,
         if (thoughtLevel != null && thoughtLevel!.isNotEmpty)
           'thoughtLevel': thoughtLevel,
+        if (modelSelection != null) 'modelSelection': modelSelection!.toWire(),
         if (earliestAtMs != null) 'earliestAvailableAt': earliestAtMs,
         if (title != null && title!.isNotEmpty) 'title': title,
       };}
@@ -246,6 +374,8 @@ class OffPeakSubmitInput {
 /// Edit-form patch for an existing run (desktop `updateTask` shape).
 /// [model]/[thoughtLevel] are emitted explicitly (null included) — the
 /// desktop sends `?? null` for them, and they clear overrides when null.
+/// [modelSelection] rides along when the form has a structured choice
+/// (official updateTask contract; null there means "unchanged").
 class OffPeakUpdateInput {
   final String title;
   final String prompt;
@@ -257,12 +387,17 @@ class OffPeakUpdateInput {
   /// Thought level (allowedModelConfigs reasoning levels); null = 默认.
   final String? thoughtLevel;
 
+  /// Structured selection (official `modelSelection`); emitted only when
+  /// the form resolved one.
+  final OffPeakModelSelection? modelSelection;
+
   const OffPeakUpdateInput({
     required this.title,
     required this.prompt,
     this.permissionMode = 'build',
     this.model,
     this.thoughtLevel,
+    this.modelSelection,
   });
 
   Map<String, dynamic> toWire() => {
@@ -272,6 +407,7 @@ class OffPeakUpdateInput {
         'model': (model == null || model!.isEmpty) ? null : model,
         'thoughtLevel':
             (thoughtLevel == null || thoughtLevel!.isEmpty) ? null : thoughtLevel,
+        if (modelSelection != null) 'modelSelection': modelSelection!.toWire(),
       };
 }
 
@@ -359,6 +495,13 @@ class OffPeakTask {
   String? get conversationId => raw['conversationId'] as String?;
   String? get error => raw['error'] as String?;
   String? get model => raw['model'] as String?;
+
+  /// Structured selection stored by the desktop (createTask/updateTask
+  /// contract); null on legacy records that only carry model/thoughtLevel.
+  OffPeakModelSelection? get modelSelection =>
+      OffPeakModelSelection.from(raw['modelSelection'] is Map
+          ? raw['modelSelection'] as Map
+          : null);
 }
 
 /// Entitlement + quota snapshot for the page header.

@@ -67,7 +67,7 @@ void main() {
     await tester.pump();
 
     expect(find.text('目标'), findsOneWidget);
-    expect(find.text('19分46秒'), findsOneWidget);
+    expect(find.text('19 分 46 秒'), findsOneWidget);
     expect(find.text('Commit 后按方案逐步执行并验证'), findsOneWidget);
     expect(find.text('1/3'), findsOneWidget); // 1 completed of 3
     // completed items are collapsed: only inProgress + pending visible
@@ -76,7 +76,7 @@ void main() {
     expect(find.text('commit 当前基线'), findsNothing);
     // running subagent with elapsed time
     expect(find.text('类型化三个 main chunk 文件'), findsOneWidget);
-    expect(find.textContaining('已运行 1分'), findsOneWidget);
+    expect(find.textContaining('已运行 1 分'), findsOneWidget);
   });
 
   testWidgets('expanding shows completed items', (tester) async {

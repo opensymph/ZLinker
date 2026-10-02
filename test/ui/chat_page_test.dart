@@ -2,6 +2,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zlinker/protocol/conversation.dart';
 import 'package:zlinker/state/device_session.dart';
@@ -137,7 +138,7 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
 
   @override
   Future<dynamic> cancelBackgroundWork(String sessionId, String workId) =>
-      _rec('cancelBackgroundWork', [sessionId, workId]);
+      Future.value(_rec('cancelBackgroundWork', [sessionId, workId]));
 
   @override
   Future<dynamic> deleteSession(String sessionId) =>
@@ -245,8 +246,61 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
     String? action,
     Map<String, dynamic>? content,
   }) => Future.value(
-    _rec('resolveInteraction', [sessionId, interactionId, optionId, content]),
+    _rec('resolveInteraction', [
+      sessionId,
+      interactionId,
+      optionId,
+      action,
+      content,
+    ]),
   );
+
+  @override
+  Future<dynamic> respondWorkspaceHookReview(
+    String sessionId,
+    Map payload,
+    List<String> reviewItemIds,
+  ) => Future.value(
+    _rec('respondWorkspaceHookReview', [sessionId, payload, reviewItemIds]),
+  );
+
+  /// Fixture for the quota banner tests; null = desktop rejected the call.
+  Map<String, dynamic>? usageEntitlementFixture;
+  List<Map<String, dynamic>> runArtifactsFixture = const [];
+  ({Uint8List bytes, String? mediaType})? runArtifactBytesFixture;
+  int usageEntitlementCalls = 0;
+
+  @override
+  Future<Map<String, dynamic>?> usageEntitlement() async {
+    usageEntitlementCalls++;
+    return usageEntitlementFixture;
+  }
+
+  @override
+  Future<dynamic> resumeWorkflowRun(String sessionId, String runId,
+          {String? name}) =>
+      Future.value(_rec('resumeWorkflowRun', [sessionId, runId, name]));
+
+  @override
+  Future<List<Map<String, dynamic>>> runArtifacts(
+      String sessionId, String runId) async {
+    calls.add(('runArtifacts', [sessionId, runId]));
+    return runArtifactsFixture;
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> runArtifactData(
+      String sessionId, String runId, String artifactId) async {
+    calls.add(('runArtifactData', [sessionId, runId, artifactId]));
+    return const [];
+  }
+
+  @override
+  Future<({Uint8List bytes, String? mediaType})?> runArtifactBytes(
+      String sessionId, String runId, Map<String, dynamic> artifact) async {
+    calls.add(('runArtifactBytes', [sessionId, runId, artifact]));
+    return runArtifactBytesFixture;
+  }
 
   @override
   Future<dynamic> rowsRange(
@@ -426,6 +480,596 @@ void main() {
         .single;
     expect(call.$2[1], 'i1');
     expect(call.$2[2], 'o1');
+  });
+
+  Map<String, dynamic> planApprovalInteraction(String id) => {
+      'interactionId': id,
+      'payload': {
+        'kind': 'userInput',
+        'toolName': 'ExitPlanMode',
+        'prompt': 'proceed?',
+        'freeText': true,
+        'input': {'plan': '# Plan\n- step 1'},
+        'schema': {
+          'interaction': 'plan_approval',
+          'toolName': 'ExitPlanMode',
+        },
+        'questions': [
+          {
+            'question': 'proceed?',
+            'header': 'Plan',
+            'options': [
+              {'value': 'approve', 'label': 'Approve'},
+            ],
+          },
+        ],
+      },
+    };
+
+  testWidgets('plan approval card approves with the official content shape', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final gateway = FakeChatGateway();
+    gateway.snapshotExtra = {
+      'pendingInteractions': [planApprovalInteraction('plan1')],
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.text('计划确认'), findsOneWidget);
+    expect(find.textContaining('step 1'), findsOneWidget);
+
+    await tester.tap(find.text('批准并继续'));
+    await tester.pumpAndSettle();
+    final call = gateway.calls
+        .where((c) => c.$1 == 'resolveInteraction')
+        .toList()
+        .single;
+    expect(call.$2[1], 'plan1');
+    expect(call.$2[3], 'accept');
+    final content = call.$2[4] as Map;
+    expect(content['answers'], {'proceed?': 'approve'});
+    expect(content['answer'], 'approve');
+  });
+
+  testWidgets('plan approval decline with feedback sends the feedback answer', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final gateway = FakeChatGateway();
+    gateway.snapshotExtra = {
+      'pendingInteractions': [planApprovalInteraction('plan2')],
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+
+    final feedbackField = find.byWidgetPredicate(
+      (w) => w is TextField && w.decoration?.hintText != null && w.decoration!.hintText!.contains('反馈意见'),
+    );
+    await tester.enterText(feedbackField, '先补测试');
+    await tester.pump();
+    await tester.tap(find.text('拒绝'));
+    await tester.pumpAndSettle();
+    final call = gateway.calls
+        .where((c) => c.$1 == 'resolveInteraction')
+        .toList()
+        .single;
+    expect(call.$2[3], 'accept');
+    final content = call.$2[4] as Map;
+    expect(content['answers'], {'proceed?': '先补测试'});
+  });
+
+  testWidgets('elicitation form submits the official answers content shape', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final gateway = FakeChatGateway();
+    gateway.snapshotExtra = {
+      'pendingInteractions': [
+        {
+          'interactionId': 'el1',
+          'payload': {
+            'kind': 'userInput',
+            'prompt': 'pick',
+            'questions': [
+              {
+                'question': 'Q1',
+                'options': [
+                  {'value': 'a', 'label': 'A'},
+                  {'value': 'b', 'label': 'B'},
+                ],
+              },
+              {
+                'question': 'Q2',
+                'multiSelect': true,
+                'options': [
+                  {'value': 'x', 'label': 'X'},
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('A'));
+    await tester.pump();
+    await tester.tap(find.text('X'));
+    await tester.pump();
+    await tester.tap(find.text('提交回答'));
+    await tester.pumpAndSettle();
+    final call = gateway.calls
+        .where((c) => c.$1 == 'resolveInteraction')
+        .toList()
+        .single;
+    expect(call.$2[1], 'el1');
+    expect(call.$2[3], 'accept');
+    final content = call.$2[4] as Map;
+    expect(content['answers'], {'Q1': 'a', 'Q2': 'x'});
+    expect(content['answer_0'], 'a');
+    expect(content['answer_1'], ['x']);
+    // The legacy single-question `answer` field only appears for 1-question
+    // requests (web buildElicitationResponseContent).
+    expect(content.containsKey('answer'), isFalse);
+  });
+
+  testWidgets('hook review card trusts the selected hooks', (tester) async {
+    final gateway = FakeChatGateway();
+    gateway.snapshotExtra = {
+      'pendingInteractions': [
+        {
+          'interactionId': 'hk1',
+          'payload': {
+            'kind': 'workspaceHookReview',
+            'workspaceLabel': 'repo',
+            'items': [
+              {
+                'reviewItemId': 'h1',
+                'displayName': 'Build hook',
+                'displayCommand': 'make build',
+                'event': 'SessionStart',
+              },
+              {
+                'reviewItemId': 'h2',
+                'displayName': 'Audit hook',
+                'displayCommand': 'audit.sh',
+                'event': 'Stop',
+              },
+            ],
+          },
+        },
+      ],
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Build hook'), findsOneWidget);
+    // Uncheck the second hook, then trust only the first.
+    await tester.tap(find.byType(Checkbox).at(1));
+    await tester.pump();
+    await tester.tap(find.text('信任所选 Hooks'));
+    await tester.pumpAndSettle();
+    final call = gateway.calls
+        .where((c) => c.$1 == 'respondWorkspaceHookReview')
+        .toList()
+        .single;
+    expect(call.$2[0], 's1');
+    expect(call.$2[2], ['h1']);
+  });
+
+  testWidgets('status panel shows workflow rows and running bash works', (
+    tester,
+  ) async {
+    final gateway = FakeChatGateway();
+    gateway.snapshotExtra = {
+      'workflowRuns': {
+        'runs': [
+          {
+            'runId': 'wf1',
+            'workId': 'wf1',
+            'status': 'running',
+            'nodesSettled': 2,
+            'nodesTotal': 5,
+            'title': 'wf1',
+          },
+        ],
+      },
+      'backgroundWorks': [
+        {
+          'workId': 'wf1',
+          'kind': 'workflow',
+          'status': 'running',
+          'title': 'wf1',
+          'cancellable': true,
+        },
+        {
+          'workId': 'b1',
+          'kind': 'bash',
+          'status': 'running',
+          'title': 'flutter test',
+        },
+      ],
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    // Fixed pumps: the workflow row's spinner never settles.
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // The panel starts as the compact capsule (web StatusSummaryRow):
+    // backgroundWork counts only, no section rows.
+    expect(find.text('工作流脚本'), findsNothing);
+    expect(find.textContaining('个后台运行'), findsOneWidget);
+
+    // Tap the capsule → full sections card (sections collapsed by default,
+    // web StatusSection defaultOpen false) → then expand both sections.
+    await tester.tap(find.textContaining('个后台运行'));
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('工作流'), findsOneWidget);
+    expect(find.text('终端'), findsOneWidget);
+    await tester.tap(find.text('工作流'));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('终端'));
+    await tester.pump(const Duration(milliseconds: 100));
+    // title ≡ workId renders the unnamed fallback; steps come from the run.
+    expect(find.text('工作流脚本'), findsOneWidget);
+    expect(find.textContaining('2/5 步'), findsOneWidget);
+    expect(find.text('flutter test'), findsOneWidget);
+
+    // Cancel the bash row (last close button in the panel).
+    await tester.tap(find.byTooltip('取消此后台任务').last);
+    await tester.pump(const Duration(milliseconds: 100));
+    final call = gateway.calls
+        .where((c) => c.$1 == 'cancelBackgroundWork')
+        .toList()
+        .single;
+    expect(call.$2, ['s1', 'b1']);
+  });
+
+  testWidgets('in-chat search finds turns and the rail renders', (
+    tester,
+  ) async {
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hello one'},
+      {'rowId': 2, 'kind': 'assistantText', 'text': 'reply one'},
+      {'rowId': 3, 'kind': 'userInput', 'text': 'needle here'},
+      {'rowId': 4, 'kind': 'assistantText', 'text': 'reply two'},
+      {'rowId': 5, 'kind': 'userInput', 'text': 'three'},
+      {'rowId': 6, 'kind': 'assistantText', 'text': 'needle again'},
+      {'rowId': 7, 'kind': 'userInput', 'text': 'four'},
+      {'rowId': 8, 'kind': 'assistantText', 'text': 'reply four'},
+    ]);
+    await tester.pumpAndSettle();
+
+    // 4 turn groups → the navigator rail renders.
+    expect(
+      find.byWidgetPredicate(
+        (w) => w.runtimeType.toString() == 'TurnNavigatorRail',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(find.byTooltip('搜索'));
+    await tester.pumpAndSettle();
+    final searchField = find.byWidgetPredicate(
+      (w) => w is TextField && w.decoration?.hintText == '搜索消息',
+    );
+    await tester.enterText(searchField, 'needle');
+    // Debounced reindex (250ms).
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('1/2'), findsOneWidget);
+
+    await tester.tap(find.byTooltip('下一个'));
+    await tester.pump(const Duration(milliseconds: 400));
+    expect(find.text('2/2'), findsOneWidget);
+
+    // Closing resets the counter.
+    await tester.tap(find.byTooltip('取消'));
+    await tester.pumpAndSettle();
+    expect(find.text('2/2'), findsNothing);
+  });
+
+  testWidgets('export sheet offers copy and save for the markdown dump', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({});
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: '导出任务')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hello world'},
+      {'rowId': 2, 'kind': 'assistantText', 'text': 'hi there'},
+      {
+        'rowId': 3,
+        'kind': 'toolCall',
+        'toolName': 'Bash',
+        'status': 'success',
+        'inputText': '{}',
+      },
+    ]);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('更多'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('导出 Markdown'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('复制全文'), findsOneWidget);
+    expect(find.text('保存为 .md 文件'), findsOneWidget);
+
+    await tester.tap(find.text('复制全文'));
+    await tester.pumpAndSettle();
+    expect(find.text('已复制'), findsOneWidget);
+  });
+
+  testWidgets('composer draft restores from shared preferences', (
+    tester,
+  ) async {
+    SharedPreferences.setMockInitialValues({'chat.draft.s1': '待发送草稿'});
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.text('待发送草稿'), findsOneWidget);
+  });
+
+  testWidgets('empty input history shows a hint toast', (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('输入历史'));
+    await tester.pumpAndSettle();
+    expect(find.text('暂无输入历史'), findsOneWidget);
+  });
+
+  testWidgets('workflow card renders the causality graph and joins the live '
+      'run', (tester) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final gateway = FakeChatGateway();
+    gateway.snapshotExtra = {
+      'workflowRuns': {
+        'runs': [
+          {
+            'runId': 'wf1',
+            'workId': 'wf1',
+            'status': 'running',
+            'nodesSettled': 1,
+            'nodesTotal': 3,
+            'currentPhase': '巡检',
+            'phaseNames': ['巡检', '汇总'],
+          },
+        ],
+      },
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+      {
+        'rowId': 2,
+        'kind': 'toolCall',
+        'toolName': 'CreateWorkflow',
+        'status': 'success',
+        'workId': 'wf1',
+        'inputText': '{"name":"ci-patrol"}',
+        'display': {
+          'kind': 'create_workflow',
+          'ok': true,
+          'errorCount': 0,
+          'diagnostics': [],
+          'causalityGraph': {
+            'steps': [
+              {'id': 's1', 'label': 'a', 'phase': 'p1'},
+              {'id': 's2', 'label': 'b', 'phase': 'p2'},
+            ],
+            'lanes': [
+              {'id': 'l1', 'name': '巡检子代理'},
+            ],
+            'participants': [
+              {'id': 'a1', 'phase': 'p1', 'lane': 'l1', 'steps': ['s1']},
+              {'id': 'a2', 'phase': 'p2', 'lane': 'l1', 'steps': ['s2']},
+            ],
+            'phases': [
+              {'id': 'p1', 'name': '巡检'},
+              {'id': 'p2', 'name': '汇总'},
+            ],
+          },
+        },
+      },
+    ]);
+    await tester.pump(const Duration(milliseconds: 300));
+    await tester.pump(const Duration(milliseconds: 100));
+
+    // Status panel starts as the compact capsule (no section headers);
+    // only the card kind word shows.
+    expect(find.text('工作流'), findsOneWidget);
+    expect(find.text('ci-patrol'), findsOneWidget);
+    expect(find.text('运行中'), findsOneWidget);
+    // Vertical station columns: labels without counts; both stations on
+    // the horizontal rail (汇总 = pending → hollow).
+    expect(find.text('巡检'), findsOneWidget);
+    expect(find.text('汇总'), findsOneWidget);
+    // Participant pills: face tile + lane name; a1 is the running one.
+    expect(find.text('巡检子代理'), findsNWidgets(2));
+    // Header detail (web workflowCardDetail): phases · agents · working.
+    // Steps intentionally never appear on the card.
+    expect(find.textContaining('2 个阶段'), findsOneWidget);
+    expect(find.textContaining('2 个子代理'), findsOneWidget);
+    expect(find.textContaining('1/3 步'), findsNothing);
+    // Current station lamp: 巡检 running (its pill spins, 汇总 pending).
+    expect(find.text('汇总报告'), findsNothing);
+  });
+
+  testWidgets('automation, workflow and CUA tool cards render summaries', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(800, 1600);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.reset);
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {
+        'rowId': 1,
+        'kind': 'userInput',
+        'text': 'hi',
+      },
+      {
+        'rowId': 2,
+        'kind': 'toolCall',
+        'toolName': 'CronCreate',
+        'status': 'success',
+        'inputText': '{}',
+        'output': {
+          'automationId': 'a1',
+          'title': '每天站会提醒',
+          'cronExpr': '0 9 * * 1-5',
+        },
+      },
+      {
+        'rowId': 3,
+        'kind': 'toolCall',
+        'toolName': 'CreateWorkflow',
+        'status': 'success',
+        'inputText': '{}',
+      },
+      {
+        'rowId': 4,
+        'kind': 'toolCall',
+        'toolName': 'mcp__computer-use__computer-use',
+        'status': 'success',
+        'inputText': '{}',
+        'display': {
+          'kind': 'cua',
+          'status': 'success',
+          'toolName': 'screenshot',
+        },
+      },
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('定时任务 · 每天站会提醒'), findsOneWidget);
+    expect(find.textContaining('0 9 * * 1-5'), findsOneWidget);
+    expect(find.textContaining('工作流 · 已创建'), findsOneWidget);
+    expect(find.textContaining('电脑操作 · 完成'), findsOneWidget);
+  });
+
+  testWidgets('quota banner shows model-quota states from the entitlement', (
+    tester,
+  ) async {
+    final gateway = FakeChatGateway();
+    gateway.usageEntitlementFixture = {
+      'quota': {
+        'limits': [
+          {
+            'meter': 'model_usage',
+            'period': 'daily',
+            'number': 100,
+            'remaining': 5,
+            'nextResetTime': 1790000000000,
+          },
+        ],
+      },
+    };
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('模型额度不足 5%'), findsOneWidget);
+    expect(gateway.usageEntitlementCalls, 1);
+
+    // Dismiss works.
+    await tester.tap(find.byIcon(Icons.close).last);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('模型额度不足'), findsNothing);
+  });
+
+  testWidgets('quota banner stays silent when entitlement is unavailable', (
+    tester,
+  ) async {
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': 'hi'},
+    ]);
+    await tester.pumpAndSettle();
+    expect(find.textContaining('额度'), findsNothing);
+  });
+
+  testWidgets('draft mode shows tappable prompt suggestions', (tester) async {
+    final gateway = FakeChatGateway();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: null, title: '新任务')),
+    );
+    await tester.pumpAndSettle();
+
+    final suggestion = find.textContaining('总结这个项目');
+    expect(suggestion, findsOneWidget);
+    await tester.tap(suggestion);
+    await tester.pumpAndSettle();
+    // Picking fills the composer (and hides the suggestions with it).
+    expect(find.widgetWithText(TextField, '总结这个项目的结构和入口'),
+        findsOneWidget);
   });
 
   testWidgets('queue bar deletes a queued item', (tester) async {

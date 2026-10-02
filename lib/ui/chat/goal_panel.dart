@@ -55,7 +55,10 @@ class _GoalPanelState extends State<GoalPanel> {
       final last = (iterations.last as Map?)?.cast<String, dynamic>();
       final items = last?['items'];
       if (items is List) {
-        return items.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList();
+        return items
+            .whereType<Map>()
+            .map((e) => e.cast<String, dynamic>())
+            .toList();
       }
     }
     final plan = widget.state.snapshot?['plan'];
@@ -65,18 +68,21 @@ class _GoalPanelState extends State<GoalPanel> {
         : const [];
   }
 
-  static String _fmtDuration(int seconds) {
+  static String _fmtDuration(BuildContext context, int seconds) {
     final m = seconds ~/ 60;
     final s = seconds % 60;
-    if (m <= 0) return '$s秒';
-    return '$m分${s.toString().padLeft(2, '0')}秒';
+    if (m <= 0) return trP(context, 'goalPanel.duration.s', ['$s']);
+    return trP(
+        context, 'goalPanel.duration.ms', ['$m', s.toString().padLeft(2, '0')]);
   }
 
   Future<void> _togglePause(String sessionId, bool paused) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      await (paused ? widget.onResumeGoal(sessionId) : widget.onPauseGoal(sessionId));
+      await (paused
+          ? widget.onResumeGoal(sessionId)
+          : widget.onPauseGoal(sessionId));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -116,9 +122,9 @@ class _GoalPanelState extends State<GoalPanel> {
                       fontSize: 13.5, fontWeight: FontWeight.w600)),
               const SizedBox(width: 8),
               if (used > 0)
-                Text(_fmtDuration(used),
-                    style: TextStyle(
-                        fontSize: 11.5, color: ZInk.muted(context))),
+                Text(_fmtDuration(context, used),
+                    style:
+                        TextStyle(fontSize: 11.5, color: ZInk.muted(context))),
               const Spacer(),
               InkWell(
                 onTap: _busy ? null : () => _togglePause(sessionId, paused),
@@ -140,20 +146,18 @@ class _GoalPanelState extends State<GoalPanel> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(title,
-                    style: TextStyle(
-                        fontSize: 12.5, color: ZInk.soft(context))),
+                    style:
+                        TextStyle(fontSize: 12.5, color: ZInk.soft(context))),
               ),
               Text('$done/$total',
-                  style: TextStyle(
-                      fontSize: 11.5, color: ZInk.muted(context))),
+                  style: TextStyle(fontSize: 11.5, color: ZInk.muted(context))),
             ],
           ),
           // ── process list
           if (items.isNotEmpty) ...[
             const SizedBox(height: 8),
             InkWell(
-              onTap: () =>
-                  setState(() => _showCompleted = !_showCompleted),
+              onTap: () => setState(() => _showCompleted = !_showCompleted),
               child: Padding(
                 padding: const EdgeInsets.symmetric(vertical: 2),
                 child: Row(
@@ -166,8 +170,7 @@ class _GoalPanelState extends State<GoalPanel> {
                       color: ZInk.ghost(context),
                     ),
                     const SizedBox(width: 4),
-                    Text(
-                        trP(context, 'goalPanel.completedN', ['$done']),
+                    Text(trP(context, 'goalPanel.completedN', ['$done']),
                         style: TextStyle(
                             fontSize: 11.5, color: ZInk.muted(context))),
                   ],
@@ -210,20 +213,20 @@ class _GoalPanelState extends State<GoalPanel> {
             Row(
               children: [
                 Text(tr(context, 'goalPanel.agents'),
-                    style: TextStyle(
-                        fontSize: 11.5, color: ZInk.muted(context))),
+                    style:
+                        TextStyle(fontSize: 11.5, color: ZInk.muted(context))),
                 const SizedBox(width: 6),
-                Text(trP(context, 'goalPanel.agentsRunning',
-                    ['${_runningAgents.length}']),
-                    style: TextStyle(
-                        fontSize: 11.5, color: ZInk.muted(context))),
+                Text(
+                    trP(context, 'goalPanel.agentsRunning',
+                        ['${_runningAgents.length}']),
+                    style:
+                        TextStyle(fontSize: 11.5, color: ZInk.muted(context))),
               ],
             ),
             const SizedBox(height: 4),
             for (final a in _runningAgents)
               Padding(
-                padding:
-                    const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
+                padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
                 child: Row(
                   children: [
                     const SizedBox(
@@ -297,11 +300,12 @@ class _AgentElapsedState extends State<_AgentElapsed> {
   Widget build(BuildContext context) {
     final started = widget.startedAt?.toInt();
     if (started == null) return const SizedBox.shrink();
-    final secs =
-        max(0, (_now?.millisecondsSinceEpoch ?? 0) - started) ~/ 1000;
+    final secs = max(0, (_now?.millisecondsSinceEpoch ?? 0) - started) ~/ 1000;
     final m = secs ~/ 60;
     final s = secs % 60;
-    return Text('已运行 $m分${s.toString().padLeft(2, '0')}秒',
+    return Text(
+        trP(context, 'goalPanel.runningFor',
+            ['$m', s.toString().padLeft(2, '0')]),
         style: TextStyle(fontSize: 10.5, color: ZInk.faint(context)));
   }
 }
