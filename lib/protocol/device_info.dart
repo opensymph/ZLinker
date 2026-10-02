@@ -10,21 +10,15 @@ const remoteAppName = 'zlinker';
 /// `web` when unknown so the handshake stays valid on exotic targets.
 String remotePlatformName() {
   if (kIsWeb) return 'web';
-  switch (defaultTargetPlatform) {
-    case TargetPlatform.android:
-      return 'android';
-    case TargetPlatform.iOS:
-      return 'ios';
-    case TargetPlatform.windows:
-      return 'windows';
-    case TargetPlatform.macOS:
-      return 'macos';
-    case TargetPlatform.linux:
-      return 'linux';
-    case TargetPlatform.fuchsia:
-      return 'fuchsia';
-    default:
-      // ohos fork adds TargetPlatform.ohos to the enum
-      return 'ohos';
-  }
+  // If-chain instead of a switch: the ohos fork adds TargetPlatform.ohos to
+  // the enum, so a default clause is unreachable on stock Flutter (CI lint)
+  // yet REQUIRED on ohos — the chain keeps both compilers happy.
+  final platform = defaultTargetPlatform;
+  if (platform == TargetPlatform.android) return 'android';
+  if (platform == TargetPlatform.iOS) return 'ios';
+  if (platform == TargetPlatform.windows) return 'windows';
+  if (platform == TargetPlatform.macOS) return 'macos';
+  if (platform == TargetPlatform.linux) return 'linux';
+  if (platform == TargetPlatform.fuchsia) return 'fuchsia';
+  return 'ohos';
 }
