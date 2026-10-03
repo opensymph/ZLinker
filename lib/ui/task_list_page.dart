@@ -1,4 +1,5 @@
 // ignore_for_file: deprecated_member_use // ohos fork's Flutter predates RadioGroup; drop when it lands
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -1720,7 +1721,17 @@ class _TaskListPageState extends State<TaskListPage> {
     String title,
   ) async {
     if (workspace != null && !_isWorkspaceActive(session, workspace)) {
-      await session.openWorkspace(workspace, taskId: entry.sessionId);
+      // Open-then-load: navigate immediately and let the workspace bridge
+      // come up in the background. The chat page renders its own loading
+      // and the subscribe retry covers the gap — the tap must always open
+      // the conversation, never error out or silently no-op.
+      unawaited(
+        session.openWorkspace(workspace, taskId: entry.sessionId).catchError(
+              (Object e) {
+                debugPrint('[task-list] openWorkspace failed: $e');
+              },
+            ),
+      );
     }
     if (!mounted) return;
     await _openChat(
@@ -1967,6 +1978,26 @@ class _TaskListPageState extends State<TaskListPage> {
     if (session == null || session.status == DeviceStatus.disconnected) {
       await _openRemote(targetSessionId: sessionId, targetTitle: title);
       return;
+    }
+    // Relay still re-handshaking after a phone resume: give it a bounded
+    // window instead of opening the chat against a dead link (subscribe
+    // would hang for up to 60s).
+    if (session.status == DeviceStatus.connecting) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(tr(context, 'tasks.connecting')),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      final deadline = DateTime.now().add(const Duration(seconds: 15));
+      while (mounted &&
+          session.status == DeviceStatus.connecting &&
+          DateTime.now().isBefore(deadline)) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+      if (!mounted) return;
+      // Timeout with the relay still connecting: proceed anyway — the chat
+      // page shows its own loading and recovers on the next subscribe.
     }
     await widget.store.touch(widget.device.id);
     if (!mounted) return;

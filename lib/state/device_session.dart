@@ -715,6 +715,16 @@ class DeviceSession extends ChangeNotifier
           } catch (_) {}
         }
         if (_disposed) return;
+        // Relay still re-handshaking (phone resume): bounded wait so taps
+        // during the connecting window actually open instead of silently
+        // no-opping.
+        final deadline = DateTime.now().add(const Duration(seconds: 15));
+        while (_client == null &&
+            !_disposed &&
+            status == DeviceStatus.connecting &&
+            DateTime.now().isBefore(deadline)) {
+          await Future.delayed(const Duration(milliseconds: 200));
+        }
         await _openWorkspaceNow(workspace, taskId: taskId);
       } finally {
         if (identical(_openChain, completer)) _openChain = null;
@@ -1120,6 +1130,16 @@ class DeviceSession extends ChangeNotifier
 
   @override
   Future<ChatHandle> subscribe(String sessionId) async {
+    // Serialize behind a pending workspace-bridge open (the open-then-load
+    // tap flow): subscribing before the bridge for the target workspace
+    // exists would ack on the WRONG bridge and never receive frames —
+    // the stuck-loading bug.
+    final chain = _openChain;
+    if (chain != null) {
+      try {
+        await chain.future;
+      } catch (_) {}
+    }
     final existing = _chatSubs[sessionId];
     if (existing != null) {
       return ChatHandle(

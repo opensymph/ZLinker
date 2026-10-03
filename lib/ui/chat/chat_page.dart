@@ -66,6 +66,7 @@ class ChatPage extends StatefulWidget {
 
 class _ChatPageState extends State<ChatPage> {
   ChatHandle? _handle;
+  bool _subscribing = false;
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   String? _sessionId;
@@ -384,33 +385,51 @@ class _ChatPageState extends State<ChatPage> {
   Future<void> _subscribe() async {
     final sessionId = _sessionId;
     if (sessionId == null) return;
+    if (_subscribing) return;
+    _subscribing = true;
     try {
-      final handle = await widget.gateway
-          .subscribe(sessionId)
-          .timeout(const Duration(seconds: 60));
-      if (!mounted) {
-        await handle.close();
-        return;
+      // Open-then-load: the workspace bridge may still be coming up in the
+      // background (tap-opens-immediately flow) — retry instead of surfacing
+      // an error, so the conversation self-heals once the relay is ready.
+      Object? lastError;
+      for (var attempt = 0; attempt < 3; attempt++) {
+        try {
+          final handle = await widget.gateway
+              .subscribe(sessionId)
+              .timeout(const Duration(seconds: 60));
+          if (!mounted) {
+            await handle.close();
+            return;
+          }
+          setState(() {
+            _handle = handle;
+            _error = null;
+          });
+          // mobile-view-state: the desktop shows 「手机正在操作此任务」 from it.
+          widget.gateway.sendViewState(taskId: sessionId);
+          handle.state.addListener(_scrollToBottom);
+          unawaited(_restoreDraft(sessionId));
+          // The server snapshot is a tail window (can be as few as 3 rows).
+          // The official client shows the full history immediately, so
+          // auto-load the missing older rows once on open.
+          if (handle.state.canLoadOlder) {
+            await _loadOlder();
+          }
+          // Explicitly position at the newest message: the state listener
+          // only fires on LATER updates and misses the initial snapshot.
+          _scrollToBottom();
+          return;
+        } catch (e) {
+          lastError = e;
+          if (mounted && attempt < 2) {
+            setState(() => _error = '$e');
+          }
+          await Future.delayed(Duration(seconds: 2 * (attempt + 1)));
+        }
       }
-      setState(() {
-        _handle = handle;
-        _error = null;
-      });
-      // mobile-view-state: the desktop shows 「手机正在操作此任务」 from it.
-      widget.gateway.sendViewState(taskId: sessionId);
-      handle.state.addListener(_scrollToBottom);
-      unawaited(_restoreDraft(sessionId));
-      // The server snapshot is a tail window (can be as few as 3 rows).
-      // The official client shows the full history immediately, so
-      // auto-load the missing older rows once on open.
-      if (handle.state.canLoadOlder) {
-        await _loadOlder();
-      }
-      // Explicitly position at the newest message: the state listener only
-      // fires on LATER updates and misses the initial snapshot.
-      _scrollToBottom();
-    } catch (e) {
-      if (mounted) setState(() => _error = '$e');
+      if (mounted && lastError != null) setState(() => _error = '$lastError');
+    } finally {
+      _subscribing = false;
     }
   }
 
