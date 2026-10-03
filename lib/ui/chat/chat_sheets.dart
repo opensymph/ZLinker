@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../protocol/conversation.dart';
+import '../../protocol/off_peak.dart';
 import '../../state/device_session.dart';
 import '../theme.dart';
 import '../ui_settings.dart';
@@ -17,6 +18,11 @@ class ModelModeSheet extends StatelessWidget {
   final Map<String, String>? draftConfig;
   final void Function(String key, String value)? onDraftChange;
 
+  /// Official model-selection choices (`model-selection` getView) — the
+  /// primary source for the model picker. Empty → fall back to
+  /// prepareWorkspace's `model` config option.
+  final List<OffPeakModelChoice> modelChoices;
+
   const ModelModeSheet({
     super.key,
     required this.gateway,
@@ -25,6 +31,7 @@ class ModelModeSheet extends StatelessWidget {
     required this.sessionId,
     this.draftConfig,
     this.onDraftChange,
+    this.modelChoices = const [],
   });
 
   bool get _isDraft => sessionId == null || sessionId!.isEmpty;
@@ -39,6 +46,28 @@ class ModelModeSheet extends StatelessWidget {
   }
 
   /// 'builtin:zai-coding-plan/GLM-5.2' → (provider, model)
+  /// Provider-grouped choices in getView order.
+  Map<String, List<OffPeakModelChoice>> get _providerGroups {
+    final groups = <String, List<OffPeakModelChoice>>{};
+    for (final choice in modelChoices) {
+      final key = choice.providerName.isNotEmpty
+          ? choice.providerName
+          : choice.providerId;
+      groups.putIfAbsent(key, () => []).add(choice);
+    }
+    return groups;
+  }
+
+  /// Thought valid for the target model: keep the session's current level
+  /// when the model supports it; otherwise take the model's first level.
+  String _thoughtFor(OffPeakModelChoice choice) {
+    final current = state?.currentThought ?? '';
+    if (current.isNotEmpty && choice.reasoningLevels.contains(current)) {
+      return current;
+    }
+    return choice.reasoningLevels.isNotEmpty ? choice.reasoningLevels.first : current;
+  }
+
   (String, String) _splitModelValue(String value) {
     final idx = value.lastIndexOf('/');
     if (idx <= 0) return (value, value);
@@ -50,8 +79,6 @@ class ModelModeSheet extends StatelessWidget {
     final sid = sessionId ?? '';
     final config = state?.config ?? const {};
     final modelOption = prep?.option('model');
-    final modeOption = prep?.option('mode');
-    final thoughtOption = prep?.option('thought_level');
     final followup = '${config['followupMode'] ?? 'queue'}';
 
     // Current selection: prefer the LIVE session config (updates after a
@@ -62,14 +89,12 @@ class ModelModeSheet extends StatelessWidget {
         _isDraft || config['model'] == null || '${config['model']}'.isEmpty
             ? (draftConfig?['model'] ?? '${modelOption?.currentValue ?? ''}')
             : liveModelValue;
-    final currentThoughtValue = _isDraft
-        ? (draftConfig?['thought'] ?? '${thoughtOption?.currentValue ?? ''}')
-        : (state?.currentThought.isNotEmpty == true
-            ? state!.currentThought
-            : '${thoughtOption?.currentValue ?? ''}');
-    final currentModeValue = _isDraft
-        ? (draftConfig?['mode'] ?? 'build')
-        : state?.currentMode ?? 'build';
+
+    bool modelSelectedFor(OffPeakModelChoice choice) {
+      final cfg = state?.config ?? const {};
+      return '${cfg['provider'] ?? ''}' == choice.providerId &&
+          '${cfg['model'] ?? ''}' == choice.modelId;
+    }
 
     // Bare model ids (single-provider) match the session's config model.
     bool modelSelected(String value) {
@@ -93,7 +118,63 @@ class ModelModeSheet extends StatelessWidget {
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
-            if (modelOption != null && modelOption.options.isNotEmpty) ...[
+            if (modelChoices.isNotEmpty) ...[
+              Text(
+                tr(context, 'chat.sheet.model'),
+                style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
+              ),
+              const SizedBox(height: 8),
+              // Provider-grouped model list from the model-selection view
+              // (official composer source). Selection = providerId+modelId;
+              // thought stays valid for the target model.
+              for (var g = 0; g < _providerGroups.length; g++) ...[
+                Padding(
+                  padding: EdgeInsets.only(top: g == 0 ? 0 : 10, bottom: 2),
+                  child: Text(
+                    _providerGroups.keys.elementAt(g),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: ZInk.ghost(context),
+                    ),
+                  ),
+                ),
+                for (final choice in _providerGroups.values.elementAt(g))
+                  ListTile(
+                    dense: true,
+                    contentPadding: EdgeInsets.zero,
+                    leading: Icon(
+                      modelSelectedFor(choice)
+                          ? Icons.radio_button_checked
+                          : Icons.radio_button_off,
+                      size: 18,
+                      color: modelSelectedFor(choice)
+                          ? ZColors.sky500
+                          : ZInk.ghost(context),
+                    ),
+                    title: Text(choice.name,
+                        style: TextStyle(
+                            fontSize: 13, color: ZInk.solid(context))),
+                    onTap: () => _apply(
+                      context,
+                      () => gateway.switchModelConfig(
+                        sid,
+                        provider: choice.providerId,
+                        model: choice.modelId,
+                        thought: _thoughtFor(choice),
+                      ),
+                              onAccepted: () => state?.optimisticPatch({
+                                'config': {
+                                  ...?state!.config,
+                                  'provider': choice.providerId,
+                                  'model': choice.modelId,
+                                  'thought': _thoughtFor(choice),
+                                },
+                              }),
+                            ),
+                  ),
+              ],
+            ] else if (modelOption != null && modelOption.options.isNotEmpty) ...[
               Text(
                 modelOption.name,
                 style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
@@ -193,157 +274,6 @@ class ModelModeSheet extends StatelessWidget {
                 ]),
                 style: TextStyle(fontSize: 12, color: ZInk.muted(context)),
               ),
-            if (thoughtOption != null && thoughtOption.options.isNotEmpty) ...[
-              Text(
-                thoughtOption.name,
-                style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final v in thoughtOption.options)
-                    ChoiceChip(
-                      label: Text(v.name),
-                      selected: currentThoughtValue == v.value ||
-                          state?.currentThought == v.value,
-                      onSelected: (_) {
-                        if (_isDraft) {
-                          onDraftChange?.call('thought', v.value);
-                        } else {
-                          final modelValue = currentModelValue;
-                          final (provider, model) = modelValue.isNotEmpty
-                              ? _splitModelValue(modelValue)
-                              : (
-                                  '${config['provider'] ?? ''}',
-                                  '${config['model'] ?? ''}',
-                                );
-                          _apply(
-                            context,
-                            () => gateway.switchModelConfig(
-                              sid,
-                              provider: provider,
-                              model: model,
-                              thought: v.value,
-                            ),
-                            onAccepted: () => state?.optimisticPatch({
-                              'config': {...?state!.config, 'thought': v.value},
-                            }),
-                          );
-                        }
-                      },
-                    ),
-                ],
-              ),
-            ] else if ((state?.thoughtLevels ?? const []).isNotEmpty) ...[
-              Text(
-                tr(context, 'chat.sheet.thought'),
-                style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
-              ),
-              const SizedBox(height: 8),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final level in state!.thoughtLevels)
-                    ChoiceChip(
-                      label: Text(level),
-                      selected: state?.currentThought == level,
-                      onSelected: (_) => _apply(
-                        context,
-                        () => gateway.switchModelConfig(
-                          sid,
-                          provider: '${config['provider'] ?? ''}',
-                          model: '${config['model'] ?? ''}',
-                          thought: level,
-                        ),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-            const SizedBox(height: 16),
-            Text(
-              tr(context, 'chat.sheet.mode'),
-              style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
-            ),
-            const SizedBox(height: 8),
-            if (modeOption != null && modeOption.options.isNotEmpty)
-              for (final v in modeOption.options)
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    currentModeValue == v.value
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_off,
-                    size: 18,
-                    color: currentModeValue == v.value
-                        ? ZColors.sky500
-                        : ZInk.ghost(context),
-                  ),
-                  title: Text(
-                    v.name,
-                    style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
-                  ),
-                  subtitle: v.description != null
-                      ? Text(
-                          v.description!,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: ZInk.faint(context),
-                          ),
-                        )
-                      : null,
-                  onTap: () {
-                    if (_isDraft) {
-                      onDraftChange?.call('mode', v.value);
-                    } else {
-                      _apply(
-                        context,
-                        () => gateway.switchCollaborationMode(sid, v.value),
-                        onAccepted: () => state?.optimisticPatch({
-                          'config': {...?state!.config, 'mode': v.value},
-                        }),
-                      );
-                    }
-                  },
-                )
-            else
-              for (final m in const ['build', 'edit', 'plan', 'yolo'])
-                ListTile(
-                  dense: true,
-                  contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    currentModeValue == m
-                        ? Icons.radio_button_checked
-                        : Icons.radio_button_off,
-                    size: 18,
-                    color: currentModeValue == m
-                        ? ZColors.sky500
-                        : ZInk.ghost(context),
-                  ),
-                  title: Text(
-                    tr(context, 'chat.mode.$m'),
-                    style: TextStyle(fontSize: 13, color: ZInk.solid(context)),
-                  ),
-                  subtitle: Text(
-                    tr(context, 'chat.mode.$m.desc'),
-                    style: TextStyle(fontSize: 11, color: ZInk.faint(context)),
-                  ),
-                  onTap: () {
-                    if (_isDraft) {
-                      onDraftChange?.call('mode', m);
-                    } else {
-                      _apply(
-                        context,
-                        () => gateway.switchCollaborationMode(sid, m),
-                        onAccepted: () => state?.optimisticPatch({
-                          'config': {...?state!.config, 'mode': m},
-                        }),
-                      );
-                    }
-                  },
-                ),
             if (!_isDraft) ...[
               const SizedBox(height: 16),
               Text(

@@ -303,13 +303,18 @@ class _InputBarState extends State<ChatInputBar> {
                       showLabel: wide,
                     ),
                   const SizedBox(width: 4),
-                  running
-                      ? _StopButton(onStop: () => _stop(context))
-                      : _SendButton(
-                          enabled: _hasInput && !sending,
-                          sending: sending,
-                          onSend: onSend,
-                        ),
+                  // Official composer state machine (web
+                  // ConversationComposer): streaming + EMPTY draft → Stop;
+                  // typed draft → Send (the follow-up enqueues and its bar
+                  // carries the send-now choice).
+                  if (running && !_hasInput)
+                    _StopButton(onStop: () => _stop(context))
+                  else
+                    _SendButton(
+                      enabled: _hasInput && !sending,
+                      sending: sending,
+                      onSend: onSend,
+                    ),
                 ],
               ),
             ],
@@ -319,6 +324,8 @@ class _InputBarState extends State<ChatInputBar> {
     );
   }
 
+  /// Official composer mode control (web V4ComposerModeControls): the chip
+  /// opens a dropdown-style dialog with the full mode radio list.
   Future<void> _pickMode(BuildContext context) async {
     final sid = sessionId;
     final value = await showDialog<String>(

@@ -790,7 +790,11 @@ class _ChatPageState extends State<ChatPage> {
 
   // ------------------------------------------------------------ sheets
 
-  void _showModelSheet() {
+  Future<void> _showModelSheet() async {
+    // Official source for the model list (model-selection getView); falls
+    // back to prepareWorkspace options when the desktop rejects it.
+    final modelChoices = await widget.gateway.modelSelectionView();
+    if (!mounted) return;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -800,6 +804,7 @@ class _ChatPageState extends State<ChatPage> {
         prep: _prep,
         sessionId: _sessionId,
         draftConfig: _draftConfig,
+        modelChoices: modelChoices,
         onDraftChange: (key, value) {
           setState(() => _draftConfig[key] = value);
         },

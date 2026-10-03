@@ -560,9 +560,6 @@ class _StatusPanelState extends State<StatusPanel> {
     final bashes = state.backgroundWorks
         .where((w) => w['kind'] == 'bash' && w['status'] == 'running')
         .toList();
-    if (git == null && workflows.isEmpty && bashes.isEmpty) {
-      return const SizedBox.shrink();
-    }
     final sessionId = state.snapshot?['sessionId'] as String? ?? '';
     return Container(
       margin: const EdgeInsets.fromLTRB(14, 4, 14, 0),

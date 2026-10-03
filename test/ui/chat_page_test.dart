@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:zlinker/protocol/conversation.dart';
+import 'package:zlinker/protocol/off_peak.dart';
 import 'package:zlinker/state/device_session.dart';
 import 'package:zlinker/ui/chat/chat_page.dart';
 import 'package:zlinker/ui/theme.dart';
@@ -268,6 +269,13 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
   Map<String, dynamic>? usageEntitlementFixture;
   List<Map<String, dynamic>> runArtifactsFixture = const [];
   ({Uint8List bytes, String? mediaType})? runArtifactBytesFixture;
+
+  /// Fixture for the composer model picker (model-selection view).
+  List<OffPeakModelChoice> modelChoicesFixture = const [];
+
+  @override
+  Future<List<OffPeakModelChoice>> modelSelectionView() async =>
+      modelChoicesFixture;
   int usageEntitlementCalls = 0;
 
   @override

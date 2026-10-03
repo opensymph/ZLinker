@@ -246,6 +246,10 @@ abstract interface class ChatGateway implements Listenable {
   /// the session quota banner. Returns null when the desktop rejects it.
   Future<Map<String, dynamic>?> usageEntitlement();
 
+  /// Official model-selection view (`model-selection` getView) backing the
+  /// composer's model picker; empty when the desktop rejects it.
+  Future<List<OffPeakModelChoice>> modelSelectionView();
+
   /// Resumes a stopped/failed workflow run (workId ≡ runId; the CLI's
   /// `resumable` bit gates the button, the command can still be rejected).
   Future<dynamic> resumeWorkflowRun(String sessionId, String runId,
@@ -1108,6 +1112,13 @@ class DeviceSession extends ChangeNotifier
   }
 
   @override
+  /// In-flight subscribes, deduped per session: rapid open / reopen while
+  /// the first subscribe is still awaiting would otherwise create TWO live
+  /// subscriptions and the second `_chatSubs[sessionId] = sub` orphans the
+  /// first — its state object stops receiving frames and the page loads
+  /// forever (until the user backs out and reopens).
+  final Map<String, Future<ChatHandle>> _subscribing = {};
+
   Future<ChatHandle> subscribe(String sessionId) async {
     final existing = _chatSubs[sessionId];
     if (existing != null) {
@@ -1121,6 +1132,18 @@ class DeviceSession extends ChangeNotifier
         },
       );
     }
+    final inFlight = _subscribing[sessionId];
+    if (inFlight != null) return inFlight;
+    final future = _subscribeNew(sessionId);
+    _subscribing[sessionId] = future;
+    try {
+      return await future;
+    } finally {
+      _subscribing.remove(sessionId);
+    }
+  }
+
+  Future<ChatHandle> _subscribeNew(String sessionId) async {
     final sub = await _requireConversation.subscribe(sessionId);
     _chatSubs[sessionId] = sub;
     return ChatHandle(
