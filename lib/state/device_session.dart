@@ -1111,7 +1111,6 @@ class DeviceSession extends ChangeNotifier
     await connect();
   }
 
-  @override
   /// In-flight subscribes, deduped per session: rapid open / reopen while
   /// the first subscribe is still awaiting would otherwise create TWO live
   /// subscriptions and the second `_chatSubs[sessionId] = sub` orphans the
@@ -1119,6 +1118,7 @@ class DeviceSession extends ChangeNotifier
   /// forever (until the user backs out and reopens).
   final Map<String, Future<ChatHandle>> _subscribing = {};
 
+  @override
   Future<ChatHandle> subscribe(String sessionId) async {
     final existing = _chatSubs[sessionId];
     if (existing != null) {
