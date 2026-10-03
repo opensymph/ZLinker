@@ -1095,6 +1095,7 @@ class ConversationSubscription extends _SubscriptionBase<ConversationState> {
   final String sessionId;
 
   DateTime _lastFrameAt = DateTime.now();
+  DateTime _startedAt = DateTime.now();
   Timer? _watchdog;
 
   ConversationSubscription._(ConversationTransport transport, this.sessionId)
@@ -1130,6 +1131,7 @@ class ConversationSubscription extends _SubscriptionBase<ConversationState> {
 
   @override
   void _onStarted() {
+    _startedAt = DateTime.now();
     _startWatchdog();
   }
 
@@ -1157,6 +1159,18 @@ class ConversationSubscription extends _SubscriptionBase<ConversationState> {
     _watchdog?.cancel();
     _watchdog = Timer.periodic(const Duration(seconds: 10), (_) {
       if (_disposed) return;
+      // No snapshot applied yet (subscribe acked but the initial frame was
+      // lost — e.g. a relay drop between ack and snapshot): force a
+      // snapshot resync until ready flips. This is the stuck-loading
+      // spinner case; the session may be idle, so the active-run check
+      // below never fires for it.
+      if (!state.ready) {
+        if (DateTime.now().difference(_startedAt).inSeconds >= 10) {
+          _transport._log('[v4] watchdog: no snapshot applied, resync');
+          _resync();
+        }
+        return;
+      }
       final quietSeconds = DateTime.now().difference(_lastFrameAt).inSeconds;
       if (quietSeconds < 20) return;
       final streaming = state.rows.any((r) => r['state'] == 'streaming');
