@@ -233,7 +233,12 @@ class _TaskListPageState extends State<TaskListPage> {
     final active = session.activeWorkspace;
     if (session.sessions?.ready == true) {
       for (final e in session.sessions!.list) {
-        if (e.raw['archived'] == true) continue;
+        if (e.raw['archived'] == true) {
+          // The live sessions-index is authoritative: an entry archived on
+          // the desktop must also hide a relay copy still marked active.
+          byId.remove(e.sessionId);
+          continue;
+        }
         byId[e.sessionId] = (e, active);
       }
     }

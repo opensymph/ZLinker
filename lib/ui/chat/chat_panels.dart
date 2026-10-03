@@ -573,6 +573,13 @@ class _StatusPanelState extends State<StatusPanel> {
       ),
       child: Column(
         children: [
+          // Goal section first (web statusPanel order): the full goal
+          // panel with pause/resume + progress items.
+          GoalPanel(
+            state: state,
+            onPauseGoal: (sid) => gateway.pauseGoal(sid),
+            onResumeGoal: (sid) => gateway.resumeGoal(sid),
+          ),
           if (git != null) _GitRow(git: git),
           if (workflows.isNotEmpty) ...[
             _sectionHeader(

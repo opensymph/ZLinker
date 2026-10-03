@@ -713,6 +713,14 @@ class _ChatPageState extends State<ChatPage> {
     final sessionId = _sessionId;
     if (state == null || sessionId == null || _loadingOlder) return;
     setState(() => _loadingOlder = true);
+    // Bottom-anchored viewport: prepending shifts content down, so remember
+    // the distance-from-bottom and restore it after the insertion frame —
+    // the user keeps reading exactly where they were and can scroll up.
+    final pxBefore =
+        _scrollController.hasClients ? _scrollController.offset : null;
+    final bottomBefore = _scrollController.hasClients
+        ? _scrollController.position.maxScrollExtent
+        : null;
     try {
       final res = await widget.gateway.rowsRange(
         sessionId,
@@ -755,9 +763,20 @@ class _ChatPageState extends State<ChatPage> {
         state
           ..hasMore = hasMore
           ..prependOlderRows(older, firstRowId);
-        // Prepending shifts the content above; keep the newest message in
-        // view when the user is pinned to the bottom.
-        if (_stickToBottom) _scrollToBottom();
+        if (_stickToBottom) {
+          _scrollToBottom();
+        } else if (pxBefore != null && bottomBefore != null) {
+          // Restore the viewport: distance-from-bottom is invariant when
+          // content is inserted above the visible range.
+          final distBefore = bottomBefore - pxBefore;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!_scrollController.hasClients) return;
+            _scrollController.jumpTo(
+              (_scrollController.position.maxScrollExtent - distBefore)
+                  .clamp(0.0, _scrollController.position.maxScrollExtent),
+            );
+          });
+        }
       } else if (state.rows.isNotEmpty) {
         state.hasMore = hasMore ?? false;
         if (mounted) _toast(tr(context, 'chat.noOlder'));
@@ -1598,8 +1617,6 @@ class _ChatPageState extends State<ChatPage> {
                   builder: (context, _) => Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      GoalBanner(state: state),
-                      GoalProcessPanel(state: state, gateway: widget.gateway),
                       QueueBar(state: state, gateway: widget.gateway),
                       PendingInteractions(
                         state: state,

@@ -51,6 +51,10 @@ class WorkflowCard extends StatefulWidget {
 }
 
 class _WorkflowCardState extends State<WorkflowCard> {
+  /// Stations whose individual NODE list is expanded (web graph view
+  /// parity: per-node running state inside a phase).
+  final Set<String> _expandedStations = {};
+
   @override
   Widget build(BuildContext context) {
     // Real desktop payloads have thrown on shapes my fixtures never covered;
@@ -304,7 +308,11 @@ class _WorkflowCardState extends State<WorkflowCard> {
               if (run != null && run.artifacts.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
-                  child: _artifactStrip(context, run.artifacts),
+                  child: GestureDetector(
+                    onTap: () =>
+                        widget.onOpenRunDetails?.call(liveRunMap ?? run.raw),
+                    child: _artifactStrip(context, run.artifacts),
+                  ),
                 ),
               if (!display.ok && display.diagnostics.isNotEmpty)
                 Padding(
@@ -451,6 +459,13 @@ class _WorkflowCardState extends State<WorkflowCard> {
                 child: _StationColumn(
                   station: stations[i],
                   state: stationState(stations[i]),
+                  nodes: _stationNodes(graph, stations[i], run),
+                  nodesExpanded: _expandedStations.contains(stations[i].key),
+                  onToggleNodes: () => setState(() {
+                    if (!_expandedStations.add(stations[i].key)) {
+                      _expandedStations.remove(stations[i].key);
+                    }
+                  }),
                   pills: [
                     for (final index in stationPills[i])
                       _Enter(
@@ -469,6 +484,37 @@ class _WorkflowCardState extends State<WorkflowCard> {
         ),
       ),
     );
+  }
+
+
+  /// Nodes of one station (web station observation): nodes whose
+  /// phaseName matches the station, each with its live step status and
+  /// the graph step label (siteId ≡ step id).
+  List<({WorkflowRunNode node, WorkflowStepStatus status, String label})>
+      _stationNodes(Map? graph, _StationInfo station, WorkflowRun run) {
+    String labelFor(WorkflowRunNode node) {
+      if (graph is Map && graph['steps'] is List) {
+        for (final step in graph['steps'] as List) {
+          if (step is Map &&
+              '${step['id'] ?? ''}' == '${node.siteId}') {
+            final label = '${step['label'] ?? ''}'.trim();
+            if (label.isNotEmpty) return label;
+          }
+        }
+      }
+      return '节点 ${node.siteId}';
+    }
+
+    return [
+      for (final node in run.nodes)
+        if (WorkflowRun.phaseNameMatches(node.phaseName, station.name) ||
+            WorkflowRun.phaseNameMatches(node.phaseName, station.key))
+          (
+            node: node,
+            status: nodeStepStatus(node),
+            label: labelFor(node),
+          ),
+    ];
   }
 
   Widget _participantPill(
@@ -728,12 +774,19 @@ class _StationColumn extends StatelessWidget {
   final _StationState state;
   final List<Widget> pills;
   final bool isLast;
+  final List<({WorkflowRunNode node, WorkflowStepStatus status, String label})>
+  nodes;
+  final bool nodesExpanded;
+  final VoidCallback onToggleNodes;
 
   const _StationColumn({
     required this.station,
     required this.state,
     required this.pills,
     required this.isLast,
+    this.nodes = const [],
+    this.nodesExpanded = false,
+    required this.onToggleNodes,
   });
 
   @override
@@ -809,13 +862,82 @@ class _StationColumn extends StatelessWidget {
           const SizedBox(height: 2),
           Padding(
             padding: const EdgeInsets.only(left: kCaptionX - 12 + 2),
-            child: Text(
-              station.name,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(fontSize: 11.5, color: labelColor),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(4),
+              onTap: nodes.isEmpty ? null : onToggleNodes,
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Flexible(
+                    child: Text(
+                      station.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style:
+                          TextStyle(fontSize: 11.5, color: labelColor),
+                    ),
+                  ),
+                  if (nodes.isNotEmpty) ...[
+                    const SizedBox(width: 3),
+                    Icon(
+                      nodesExpanded
+                          ? Icons.keyboard_arrow_up
+                          : Icons.keyboard_arrow_down,
+                      size: 12,
+                      color: ZInk.faint(context),
+                    ),
+                  ],
+                ],
+              ),
             ),
           ),
+          const SizedBox(height: 3),
+          // Per-NODE live status (web graph parity): each step of the
+          // phase with its running state.
+          if (nodesExpanded)
+            for (final node in nodes)
+              Padding(
+                padding: const EdgeInsets.only(left: 2, bottom: 3),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: switch (node.status) {
+                        WorkflowStepStatus.running =>
+                          const CircularProgressIndicator(strokeWidth: 1.4),
+                        WorkflowStepStatus.done => Icon(
+                            Icons.check_circle_outline,
+                            size: 12,
+                            color: ZColors.success,
+                          ),
+                        WorkflowStepStatus.failed => Icon(
+                            Icons.error_outline,
+                            size: 12,
+                            color: ZColors.danger,
+                          ),
+                        _ => Icon(Icons.radio_button_unchecked,
+                            size: 12, color: ZInk.faint(context)),
+                      },
+                    ),
+                    const SizedBox(width: 5),
+                    Expanded(
+                      child: Text(
+                        node.label,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: node.status == WorkflowStepStatus.done
+                              ? ZInk.faint(context)
+                              : ZInk.soft(context),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
           const SizedBox(height: 5),
           if (pills.isEmpty)
             Padding(

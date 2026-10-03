@@ -71,6 +71,14 @@ class ModelModeSheet extends StatelessWidget {
         ? (draftConfig?['mode'] ?? 'build')
         : state?.currentMode ?? 'build';
 
+    // Bare model ids (single-provider) match the session's config model.
+    bool modelSelected(String value) {
+      if (currentModelValue == value) return true;
+      final cfgModel = '${config['model'] ?? ''}';
+      return cfgModel.isNotEmpty &&
+          (cfgModel == value || value.endsWith('/$cfgModel'));
+    }
+
     return SafeArea(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(20),
@@ -112,11 +120,11 @@ class ModelModeSheet extends StatelessWidget {
                   dense: true,
                   contentPadding: EdgeInsets.zero,
                   leading: Icon(
-                    currentModelValue == v.value
+                    modelSelected(v.value)
                         ? Icons.radio_button_checked
                         : Icons.radio_button_off,
                     size: 18,
-                    color: currentModelValue == v.value
+                    color: modelSelected(v.value)
                         ? ZColors.sky500
                         : ZInk.ghost(context),
                   ),
@@ -137,7 +145,13 @@ class ModelModeSheet extends StatelessWidget {
                     if (_isDraft) {
                       onDraftChange?.call('model', v.value);
                     } else {
-                      final (provider, model) = _splitModelValue(v.value);
+                      // Single-provider setups (e.g. glm) list BARE model
+                      // ids without a provider prefix — keep the session's
+                      // current provider instead of echoing the model twice.
+                      final (rawProvider, model) = _splitModelValue(v.value);
+                      final provider = v.value.contains('/')
+                          ? rawProvider
+                          : '${config['provider'] ?? rawProvider}';
                       // thought must be valid for the target model:
                       // keep current if supported, else fall back to the
                       // thought option's currentValue.
