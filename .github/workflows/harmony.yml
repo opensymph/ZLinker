@@ -24,8 +24,6 @@ on:
         # Huawei Cloud mirror, no login required (verified 200 OK, ~3.0GB).
         # Bundles the HarmonyOS NEXT SDK — no sdkmgr step needed.
         default: 'https://repo.huaweicloud.com/harmonyos/ohpm/5.0.5/commandline-tools-linux-x64-5.0.5.310.zip'
-  push:
-    tags: ['v*']
 
 env:
   # IMPORTANT: release tags point at engine hashes the SIG bucket NEVER
