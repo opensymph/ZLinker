@@ -114,7 +114,17 @@ class _DevicesPageState extends State<DevicesPage>
       messenger.showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 8),
-          content: Text(tr(context, 'devices.clipboard.offer')),
+          content: Row(
+            children: [
+              Expanded(child: Text(tr(context, 'devices.clipboard.offer'))),
+              // 关闭: dismiss without adding (re-offers next session).
+              IconButton(
+                icon: const Icon(Icons.close, size: 18),
+                tooltip: tr(context, 'common.cancel'),
+                onPressed: () => messenger.hideCurrentSnackBar(),
+              ),
+            ],
+          ),
           action: SnackBarAction(
             label: tr(context, 'devices.clipboard.add'),
             onPressed: () async {
