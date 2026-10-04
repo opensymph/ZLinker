@@ -67,6 +67,7 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   ChatHandle? _handle;
   bool _subscribing = false;
+  Timer? _followTimer;
   final _inputController = TextEditingController();
   final _scrollController = ScrollController();
   String? _sessionId;
@@ -237,6 +238,7 @@ class _ChatPageState extends State<ChatPage> {
     } catch (_) {}
     unawaited(_saveDraft());
     widget.gateway.removeListener(_onSessionRebuilt);
+    _followTimer?.cancel();
     _handle?.close();
     _inputController.dispose();
     _scrollController.dispose();
@@ -473,10 +475,45 @@ class _ChatPageState extends State<ChatPage> {
   /// the old ones and re-subscribes at the session level). A page holding
   /// the dead handle freezes on whatever it built last — the stuck spinner
   /// with a live-looking header. Re-check the subscription: dedup makes it
-  /// free when nothing changed, and [_subscribe] swaps onto the new state.
+  /// free when nothing changed, and only a genuine state swap does work —
+  /// no view-state/Draft/loadOlder churn per notify.
   void _onSessionRebuilt() {
-    if (!mounted || _subscribing || _sessionId == null) return;
-    unawaited(_subscribe());
+    if (!mounted || _sessionId == null) return;
+    _followTimer?.cancel();
+    _followTimer = Timer(const Duration(milliseconds: 300), () {
+      unawaited(_followSubscription());
+    });
+  }
+
+  Future<void> _followSubscription() async {
+    final sessionId = _sessionId;
+    if (!mounted || _subscribing || sessionId == null) return;
+    if (_handle == null) return; // the initial _subscribe owns first attach
+    try {
+      final handle = await widget.gateway
+          .subscribe(sessionId)
+          .timeout(const Duration(seconds: 60));
+      if (!mounted) {
+        await handle.close();
+        return;
+      }
+      if (identical(_handle!.state, handle.state)) return;
+      final old = _handle;
+      setState(() {
+        _handle = handle;
+        _error = null;
+      });
+      handle.state.addListener(_scrollToBottom);
+      unawaited(old?.close());
+      unawaited(_restoreDraft(sessionId));
+      if (handle.state.canLoadOlder) {
+        await _loadOlder();
+      }
+      _scrollToBottom();
+    } catch (_) {
+      // Surface nothing here: the session-level heal / the user-visible
+      // retry path owns error reporting; this is a background follow.
+    }
   }
 
   void _scrollToBottom() {
