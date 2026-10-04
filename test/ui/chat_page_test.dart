@@ -1266,9 +1266,11 @@ void main() {
       wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
     );
     // finite pumps: the page shows an endless connect spinner on failure,
-    // pumpAndSettle would time out on it.
+    // pumpAndSettle would time out on it. Pump through the full auto-retry
+    // window (3 attempts, backoff 2s + 4s + 6s) so the banner is the final
+    // state and no retry timer is left pending.
     await tester.pump();
-    await tester.pump(const Duration(milliseconds: 50));
+    await tester.pump(const Duration(seconds: 14));
     expect(find.textContaining('订阅失败'), findsOneWidget);
     expect(find.text('重试'), findsOneWidget);
   });

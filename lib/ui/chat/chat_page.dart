@@ -126,6 +126,25 @@ class _ChatPageState extends State<ChatPage> {
   ConversationState? get _state => _handle?.state;
 
   @override
+  void didUpdateWidget(ChatPage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // Embedded dual-pane swaps the sessionId on the SAME widget (the
+    // ValueKey only rebuilds when the id changes... it does not: the pane
+    // reuses this state for the same key). When the id moves, re-subscribe
+    // against the new conversation bridge.
+    final newId = widget.sessionId;
+    if (newId != oldWidget.sessionId) {
+      _sessionId = newId;
+      _handle?.close();
+      _handle = null;
+      _turnKeys.clear();
+      if (newId != null) {
+        _subscribe();
+      }
+    }
+  }
+
+  @override
   void initState() {
     super.initState();
     _sessionId = widget.sessionId;

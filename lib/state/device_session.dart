@@ -756,6 +756,11 @@ class DeviceSession extends ChangeNotifier
       }
       final oldSub = _sessionsSub;
       final oldBridge = _bridge;
+      // Surviving chats re-subscribe on the NEW bridge after it comes up;
+      // their old handles get disposed. This is what heals open chat pages
+      // when the workspace bridge swaps underneath them (the orphan-handle
+      // stuck-loading bug: old handle acked on a dead bridge).
+      final survivingChats = Map.of(_chatSubs);
       final oldChats = List.of(_chatSubs.values);
       _sessionsSub = null;
       _conversation = null;
@@ -767,6 +772,18 @@ class DeviceSession extends ChangeNotifier
         unawaited(s.dispose());
       }
       oldBridge?.dispose();
+      // Re-open the conversations the UI is still holding, against the new
+      // bridge, as soon as its conversation transport exists.
+      () async {
+        for (final sid in survivingChats.keys) {
+          try {
+            await subscribe(sid);
+          } catch (_) {
+            // subscribe is an untracked background heal; failures surface
+            // through the page's own retry banner.
+          }
+        }
+      }();
 
       final scope = <String, dynamic>{
         'workspacePath': workspace['workspacePath'],
