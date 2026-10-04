@@ -22,7 +22,9 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
   @override
   String? error;
 
-  final ConversationState state = ConversationState();
+  /// Swappable (not final): the bridge-rebuild heal test swaps in a fresh
+  /// state to mimic the session re-subscribing underneath the page.
+  ConversationState state = ConversationState();
   final List<(String, List<Object?>)> calls = [];
   Object Function(String method)? failSubscribeWith;
 
@@ -64,7 +66,11 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
     final handle = ChatHandle(state: state, close: () async {});
     final gate = subscribeGate;
     if (gate != null) await gate.future;
-    return handle;
+    // Read `state` again after the gate: a swap while gated must hand out
+    // the NEW subscription, like the session-level heal does.
+    return identical(handle.state, state)
+        ? handle
+        : ChatHandle(state: state, close: () async {});
   }
 
   dynamic _rec(String method, [List<Object?> args = const []]) {
@@ -452,6 +458,38 @@ void main() {
       expect(find.text('帮我修复登录'), findsOneWidget);
     },
   );
+
+  testWidgets('subscription swapped underneath the page is followed', (
+    tester,
+  ) async {
+    // Regression: the bridge-rebuild heal disposes the session's old
+    // conversation subscription and re-subscribes at the session level, but
+    // the mounted page kept its dead handle — the body froze on whatever it
+    // built last (spinner or stale list). The page must follow the swap
+    // when the session notifies.
+    final gateway = FakeChatGateway()
+      ..subscribeGate = Completer<ChatHandle>();
+    await tester.pumpWidget(
+      wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+    );
+    await tester.pump(); // first build: subscribe still pending
+    gateway.subscribeGate!
+        .complete(ChatHandle(state: gateway.state, close: () async {}));
+    await tester.pump(); // handle set on the old state, not ready
+    expect(find.text('桥换后的新消息'), findsNothing);
+
+    // Heal: fresh state takes over, gets the snapshot, session notifies.
+    gateway.state = ConversationState();
+    gateway.feedSnapshot([
+      {'rowId': 1, 'kind': 'userInput', 'text': '桥换后的新消息'},
+      {'rowId': 2, 'kind': 'assistantText', 'text': '新会话已接上'},
+    ]);
+    gateway.notifyListeners();
+    await tester.pumpAndSettle();
+
+    expect(find.text('桥换后的新消息'), findsOneWidget);
+    expect(find.text('新会话已接上'), findsOneWidget);
+  });
 
   testWidgets('tool call renders summary + expandable diff', (tester) async {
     final gateway = FakeChatGateway();

@@ -398,6 +398,13 @@ class DeviceSession extends ChangeNotifier
   ConversationTransport? _conversation;
   SessionsIndexSubscription? _sessionsSub;
   final Map<String, ConversationSubscription> _chatSubs = {};
+
+  /// Live [ChatHandle]s per subscription: subscribe() dedup hands the SAME
+  /// subscription to several callers (pane page + pushed full-screen page +
+  /// workflow subagent pages), so closing one handle must only dispose the
+  /// underlying subscription when the LAST handle goes away — otherwise the
+  /// surviving page freezes on a disposed state.
+  final Map<String, int> _chatSubRefs = {};
   StreamSubscription? _failureSub;
   StreamSubscription? _wsListSub;
   StreamSubscription? _appErrSub;
@@ -765,6 +772,7 @@ class DeviceSession extends ChangeNotifier
       _sessionsSub = null;
       _conversation = null;
       _chatSubs.clear();
+      _chatSubRefs.clear();
       _bridge = bridge;
       _activeWorkspace = workspace;
       unawaited(oldSub?.dispose());
@@ -1143,7 +1151,7 @@ class DeviceSession extends ChangeNotifier
   /// subscriptions and the second `_chatSubs[sessionId] = sub` orphans the
   /// first — its state object stops receiving frames and the page loads
   /// forever (until the user backs out and reopens).
-  final Map<String, Future<ChatHandle>> _subscribing = {};
+  final Map<String, Future<ConversationSubscription>> _subscribing = {};
 
   @override
   Future<ChatHandle> subscribe(String sessionId) async {
@@ -1158,40 +1166,56 @@ class DeviceSession extends ChangeNotifier
       } catch (_) {}
     }
     final existing = _chatSubs[sessionId];
-    if (existing != null) {
-      return ChatHandle(
-        state: existing.state,
-        close: () async {
-          if (_chatSubs[sessionId] == existing) {
-            _chatSubs.remove(sessionId);
-            await existing.dispose();
-          }
-        },
-      );
-    }
+    if (existing != null) return _trackedChatHandle(sessionId, existing);
     final inFlight = _subscribing[sessionId];
-    if (inFlight != null) return inFlight;
+    if (inFlight != null) {
+      final sub = await inFlight;
+      return _trackedChatHandle(sessionId, sub);
+    }
     final future = _subscribeNew(sessionId);
     _subscribing[sessionId] = future;
     try {
-      return await future;
+      return _trackedChatHandle(sessionId, await future);
+    } catch (e) {
+      // A subscribe that never acks is the wedged-bridge signature. The
+      // stall policy only watches callChannel, so without this escalation
+      // the page's retries would bang the same dead pipeline forever
+      // (the eternal-loading-spinner report). The debounced policy shares
+      // one rebuild across parallel failures.
+      if (e is TimeoutException) {
+        _forceRebuildAfterStall('subscribe $sessionId timed out');
+      }
+      rethrow;
     } finally {
       _subscribing.remove(sessionId);
     }
   }
 
-  Future<ChatHandle> _subscribeNew(String sessionId) async {
-    final sub = await _requireConversation.subscribe(sessionId);
-    _chatSubs[sessionId] = sub;
+  /// Refcounted handle factory — see [_chatSubRefs].
+  ChatHandle _trackedChatHandle(
+    String sessionId,
+    ConversationSubscription sub,
+  ) {
+    _chatSubRefs[sessionId] = (_chatSubRefs[sessionId] ?? 0) + 1;
     return ChatHandle(
       state: sub.state,
       close: () async {
-        if (_chatSubs[sessionId] == sub) {
-          _chatSubs.remove(sessionId);
-          await sub.dispose();
+        final left = (_chatSubRefs[sessionId] ?? 1) - 1;
+        if (left > 0) {
+          _chatSubRefs[sessionId] = left;
+          return;
         }
+        _chatSubRefs.remove(sessionId);
+        if (_chatSubs[sessionId] == sub) _chatSubs.remove(sessionId);
+        await sub.dispose();
       },
     );
+  }
+
+  Future<ConversationSubscription> _subscribeNew(String sessionId) async {
+    final sub = await _requireConversation.subscribe(sessionId);
+    _chatSubs[sessionId] = sub;
+    return sub;
   }
 
   @override

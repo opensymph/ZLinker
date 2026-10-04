@@ -154,6 +154,7 @@ class _ChatPageState extends State<ChatPage> {
       _inputController.text = initial;
     }
     _scrollController.addListener(_onScroll);
+    widget.gateway.addListener(_onSessionRebuilt);
     if (_sessionId != null) {
       _subscribe();
     }
@@ -235,6 +236,7 @@ class _ChatPageState extends State<ChatPage> {
       widget.gateway.sendViewState();
     } catch (_) {}
     unawaited(_saveDraft());
+    widget.gateway.removeListener(_onSessionRebuilt);
     _handle?.close();
     _inputController.dispose();
     _scrollController.dispose();
@@ -420,19 +422,33 @@ class _ChatPageState extends State<ChatPage> {
             await handle.close();
             return;
           }
-          setState(() {
-            _handle = handle;
-            _error = null;
-          });
+          // The session may have swapped subscriptions underneath us (the
+          // bridge-rebuild heal re-subscribes at the session level). Follow
+          // only genuine swaps: re-listening / reloading on the same state
+          // would duplicate scroll listeners and re-page history.
+          final sameSubscription =
+              _handle != null && identical(_handle!.state, handle.state);
+          if (!sameSubscription) {
+            final old = _handle;
+            setState(() {
+              _handle = handle;
+              _error = null;
+            });
+            handle.state.addListener(_scrollToBottom);
+            // Refcounted at the session: this is a no-op unless we still
+            // own the last reference.
+            unawaited(old?.close());
+          }
           // mobile-view-state: the desktop shows 「手机正在操作此任务」 from it.
           widget.gateway.sendViewState(taskId: sessionId);
-          handle.state.addListener(_scrollToBottom);
-          unawaited(_restoreDraft(sessionId));
-          // The server snapshot is a tail window (can be as few as 3 rows).
-          // The official client shows the full history immediately, so
-          // auto-load the missing older rows once on open.
-          if (handle.state.canLoadOlder) {
-            await _loadOlder();
+          if (!sameSubscription) {
+            unawaited(_restoreDraft(sessionId));
+            // The server snapshot is a tail window (can be as few as 3 rows).
+            // The official client shows the full history immediately, so
+            // auto-load the missing older rows once on open.
+            if (handle.state.canLoadOlder) {
+              await _loadOlder();
+            }
           }
           // Explicitly position at the newest message: the state listener
           // only fires on LATER updates and misses the initial snapshot.
@@ -450,6 +466,17 @@ class _ChatPageState extends State<ChatPage> {
     } finally {
       _subscribing = false;
     }
+  }
+
+  /// The session notifies on workspace-bridge rebuilds; a rebuild swaps the
+  /// conversation subscriptions OUT from under this page (the heal disposes
+  /// the old ones and re-subscribes at the session level). A page holding
+  /// the dead handle freezes on whatever it built last — the stuck spinner
+  /// with a live-looking header. Re-check the subscription: dedup makes it
+  /// free when nothing changed, and [_subscribe] swaps onto the new state.
+  void _onSessionRebuilt() {
+    if (!mounted || _subscribing || _sessionId == null) return;
+    unawaited(_subscribe());
   }
 
   void _scrollToBottom() {
