@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -24,6 +25,10 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
   final ConversationState state = ConversationState();
   final List<(String, List<Object?>)> calls = [];
   Object Function(String method)? failSubscribeWith;
+
+  /// Hold subscribe open until the test completes it — lets the snapshot
+  /// land AFTER the page rendered its not-ready spinner.
+  Completer<ChatHandle>? subscribeGate;
 
   /// Extra snapshot fields merged into every feed (queue, interactions...).
   Map<String, dynamic> snapshotExtra = const {};
@@ -56,7 +61,10 @@ class FakeChatGateway extends ChangeNotifier implements ChatGateway {
   Future<ChatHandle> subscribe(String sessionId) async {
     final fail = failSubscribeWith;
     if (fail != null) throw fail('subscribe');
-    return ChatHandle(state: state, close: () async {});
+    final handle = ChatHandle(state: state, close: () async {});
+    final gate = subscribeGate;
+    if (gate != null) await gate.future;
+    return handle;
   }
 
   dynamic _rec(String method, [List<Object?> args = const []]) {
@@ -415,6 +423,35 @@ void main() {
     expect(find.textContaining('已工作'), findsOneWidget);
     expect(find.text('已完成'), findsOneWidget);
   });
+
+  testWidgets(
+    'snapshot arriving after the spinner swaps the body in on its own',
+    (tester) async {
+      // Regression: the not-ready spinner branch sat OUTSIDE any state
+      // listener, so a snapshot landing after the page built never removed
+      // it (top capsule listened, the body didn't) — it hung until an
+      // unrelated page setState.
+      final gateway = FakeChatGateway()
+        ..subscribeGate = Completer<ChatHandle>();
+      await tester.pumpWidget(
+        wrap(ChatPage(gateway: gateway, sessionId: 's1', title: 't')),
+      );
+      await tester.pump(); // first build: subscribe still pending
+      gateway.subscribeGate!
+          .complete(ChatHandle(state: gateway.state, close: () async {}));
+      await tester.pump(); // handle set, snapshot not yet applied
+      expect(find.text('帮我修复登录'), findsNothing);
+
+      // Snapshot lands with NO page-level setState — only notifyListeners.
+      gateway.feedSnapshot([
+        {'rowId': 1, 'kind': 'userInput', 'text': '帮我修复登录'},
+        {'rowId': 2, 'kind': 'assistantText', 'text': '已修复'},
+      ]);
+      await tester.pumpAndSettle();
+
+      expect(find.text('帮我修复登录'), findsOneWidget);
+    },
+  );
 
   testWidgets('tool call renders summary + expandable diff', (tester) async {
     final gateway = FakeChatGateway();

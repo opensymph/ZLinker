@@ -1532,112 +1532,114 @@ class _ChatPageState extends State<ChatPage> {
                           )
                         : const CircularProgressIndicator(),
                   )
-                : !state.ready
-                    ? const Center(child: CircularProgressIndicator())
-                    : AnimatedBuilder(
-                        animation: state,
-                        builder: (context, _) {
-                          final groups = groupTurnRows(state.rows);
-                          final itemCount =
-                              groups.length + (state.canLoadOlder ? 1 : 0);
-                          if (groups.isEmpty && !state.canLoadOlder) {
-                            return Center(
-                              child: Text(
-                                tr(context, 'chat.empty'),
-                                style: TextStyle(color: ZInk.faint(context)),
-                              ),
-                            );
-                          }
-                          return _contentCol(
-                            Stack(
-                              children: [
-                                ListView.builder(
-                                  controller: _scrollController,
-                                  padding:
-                                      const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                                  itemCount: itemCount,
-                                  itemBuilder: (context, index) {
-                                    if (state.canLoadOlder && index == 0) {
-                                      return Center(
-                                        child: TextButton.icon(
-                                          onPressed:
-                                              _loadingOlder ? null : _loadOlder,
-                                          icon: _loadingOlder
-                                              ? const SizedBox(
-                                                  width: 12,
-                                                  height: 12,
-                                                  child:
-                                                      CircularProgressIndicator(
-                                                    strokeWidth: 1.5,
-                                                  ),
-                                                )
-                                              : const Icon(Icons.history,
-                                                  size: 14),
-                                          label: Text(
-                                            tr(context, 'chat.loadOlder'),
-                                            style:
-                                                const TextStyle(fontSize: 12),
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                    final groupIndex =
-                                        index - (state.canLoadOlder ? 1 : 0);
-                                    final group = groups[groupIndex];
-                                    final previous = groupIndex > 0
-                                        ? groups[groupIndex - 1]
-                                        : null;
-                                    return Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.stretch,
-                                      children: [
-                                        if (_timeDividerLabel(
-                                                previous, group) !=
-                                            null)
-                                          TimeDivider(
-                                            label: _timeDividerLabel(
-                                                previous, group)!,
-                                          ),
-                                        TurnGroupWidget(
-                                          key: group.isEmpty
-                                              ? null
-                                              : _turnKeyFor(
-                                                  _rowIdOf(group.first)),
-                                          rows: group,
-                                          gateway: widget.gateway,
-                                          sessionId: _sessionId ?? '',
-                                          onAction: _run,
-                                          state: state,
-                                        ),
-                                      ],
-                                    );
-                                  },
-                                ),
-                                if (groups.length >= 4)
-                                  Positioned(
-                                    right: 0,
-                                    top: 0,
-                                    bottom: 0,
-                                    child: Center(
-                                      child: TurnNavigatorRail(
-                                        turnCount: groups.length,
-                                        activeIndex: _visibleTurn,
-                                        onJump: (i) {
-                                          if (i < groups.length &&
-                                              groups[i].isNotEmpty) {
-                                            _jumpToTurnRowId(
-                                              _rowIdOf(groups[i].first),
-                                            );
-                                          }
-                                        },
+                // The ready→list transition must listen to the state itself:
+                // the page-level build only runs on setState, so a spinner
+                // rendered before the snapshot arrived used to persist until
+                // an unrelated rebuild (the capsule above listened, the body
+                // didn't — "top content appears but the body never does").
+                : AnimatedBuilder(
+                    animation: state,
+                    builder: (context, _) {
+                      if (!state.ready) {
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
+                      }
+                      final groups = groupTurnRows(state.rows);
+                      final itemCount =
+                          groups.length + (state.canLoadOlder ? 1 : 0);
+                      if (groups.isEmpty && !state.canLoadOlder) {
+                        return Center(
+                          child: Text(
+                            tr(context, 'chat.empty'),
+                            style: TextStyle(color: ZInk.faint(context)),
+                          ),
+                        );
+                      }
+                      return _contentCol(
+                        Stack(
+                          children: [
+                            ListView.builder(
+                              controller: _scrollController,
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                              itemCount: itemCount,
+                              itemBuilder: (context, index) {
+                                if (state.canLoadOlder && index == 0) {
+                                  return Center(
+                                    child: TextButton.icon(
+                                      onPressed:
+                                          _loadingOlder ? null : _loadOlder,
+                                      icon: _loadingOlder
+                                          ? const SizedBox(
+                                              width: 12,
+                                              height: 12,
+                                              child: CircularProgressIndicator(
+                                                strokeWidth: 1.5,
+                                              ),
+                                            )
+                                          : const Icon(Icons.history, size: 14),
+                                      label: Text(
+                                        tr(context, 'chat.loadOlder'),
+                                        style: const TextStyle(fontSize: 12),
                                       ),
                                     ),
-                                  ),
-                              ],
+                                  );
+                                }
+                                final groupIndex =
+                                    index - (state.canLoadOlder ? 1 : 0);
+                                final group = groups[groupIndex];
+                                final previous = groupIndex > 0
+                                    ? groups[groupIndex - 1]
+                                    : null;
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (_timeDividerLabel(previous, group) !=
+                                        null)
+                                      TimeDivider(
+                                        label:
+                                            _timeDividerLabel(previous, group)!,
+                                      ),
+                                    TurnGroupWidget(
+                                      key: group.isEmpty
+                                          ? null
+                                          : _turnKeyFor(_rowIdOf(group.first)),
+                                      rows: group,
+                                      gateway: widget.gateway,
+                                      sessionId: _sessionId ?? '',
+                                      onAction: _run,
+                                      state: state,
+                                    ),
+                                  ],
+                                );
+                              },
                             ),
-                          );
-                        },
-                      ),
+                            if (groups.length >= 4)
+                              Positioned(
+                                right: 0,
+                                top: 0,
+                                bottom: 0,
+                                child: Center(
+                                  child: TurnNavigatorRail(
+                                    turnCount: groups.length,
+                                    activeIndex: _visibleTurn,
+                                    onJump: (i) {
+                                      if (i < groups.length &&
+                                          groups[i].isNotEmpty) {
+                                        _jumpToTurnRowId(
+                                          _rowIdOf(groups[i].first),
+                                        );
+                                      }
+                                    },
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
           ),
           AnimatedBuilder(
             animation: widget.gateway,
@@ -1712,49 +1714,49 @@ class _ChatPageState extends State<ChatPage> {
               onRemove: (i) => setState(() => _pendingFiles.removeAt(i)),
             ),
           if (!widget.readOnly)
-          AnimatedBuilder(
-            animation: (state == null)
-                ? widget.gateway
-                : Listenable.merge([state, widget.gateway]),
-            builder: (context, _) => _contentCol(
-              Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (state == null &&
-                      _sessionId == null &&
-                      !_sending &&
-                      _inputController.text.isEmpty &&
-                      _pendingFiles.isEmpty)
-                    DraftSuggestedPrompts(
-                      onPick: (text) {
-                        _inputController.text = text;
-                        _inputController.selection = TextSelection.collapsed(
-                          offset: text.length,
-                        );
-                      },
+            AnimatedBuilder(
+              animation: (state == null)
+                  ? widget.gateway
+                  : Listenable.merge([state, widget.gateway]),
+              builder: (context, _) => _contentCol(
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (state == null &&
+                        _sessionId == null &&
+                        !_sending &&
+                        _inputController.text.isEmpty &&
+                        _pendingFiles.isEmpty)
+                      DraftSuggestedPrompts(
+                        onPick: (text) {
+                          _inputController.text = text;
+                          _inputController.selection = TextSelection.collapsed(
+                            offset: text.length,
+                          );
+                        },
+                      ),
+                    ChatInputBar(
+                      controller: _inputController,
+                      sending: _sending,
+                      hasAttachments: _pendingFiles.isNotEmpty,
+                      isDraft: _sessionId == null,
+                      state: state,
+                      prep: _prep,
+                      draftConfig: _draftConfig,
+                      gateway: widget.gateway,
+                      sessionId: _sessionId,
+                      onSend: _send,
+                      onAttach: _pickFiles,
+                      onSkills: _openSkillsPicker,
+                      onHistory: _openInputHistory,
+                      onModelSheet: _showModelSheet,
+                      onUsage: _showUsageSheet,
                     ),
-                  ChatInputBar(
-                    controller: _inputController,
-                    sending: _sending,
-                    hasAttachments: _pendingFiles.isNotEmpty,
-                    isDraft: _sessionId == null,
-                    state: state,
-                    prep: _prep,
-                    draftConfig: _draftConfig,
-                    gateway: widget.gateway,
-                    sessionId: _sessionId,
-                    onSend: _send,
-                    onAttach: _pickFiles,
-                    onSkills: _openSkillsPicker,
-                    onHistory: _openInputHistory,
-                    onModelSheet: _showModelSheet,
-                    onUsage: _showUsageSheet,
-                  ),
-                ],
+                  ],
+                ),
+                maxWidth: _kComposerColumnWidth,
               ),
-              maxWidth: _kComposerColumnWidth,
             ),
-          ),
         ],
       ),
     );
