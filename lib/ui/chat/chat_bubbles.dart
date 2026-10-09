@@ -46,7 +46,7 @@ class _UserBubbleState extends State<UserBubble> {
             margin: const EdgeInsets.only(left: 56, top: 4, bottom: 4),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-              color: ZColors.darkCard,
+              color: ZInk.card(context),
               borderRadius: const BorderRadius.only(
                 topLeft: Radius.circular(16),
                 topRight: Radius.circular(16),

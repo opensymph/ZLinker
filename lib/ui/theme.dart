@@ -71,6 +71,14 @@ class ZInk {
   static Color tile(BuildContext c) =>
       _dark(c) ? ZColors.darkSecondary : ZColors.lightSecondary;
 
+  /// Card / panel surface (chat composer, user bubbles, sheets).
+  static Color card(BuildContext c) =>
+      _dark(c) ? ZColors.darkCard : ZColors.lightCard;
+
+  /// Full-bleed page surface (scrim overlays, kicked-offline mask).
+  static Color surface(BuildContext c) =>
+      _dark(c) ? ZColors.darkBackground : ZColors.lightBackground;
+
   /// 1px hairline borders around tiles.
   static Color hairline(BuildContext c) => _dark(c)
       ? const Color(0x14FFFFFF)

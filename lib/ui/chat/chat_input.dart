@@ -223,7 +223,7 @@ class _InputBarState extends State<ChatInputBar> {
         child: Container(
           padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
           decoration: BoxDecoration(
-            color: ZColors.darkCard,
+            color: ZInk.card(context),
             borderRadius: BorderRadius.circular(22),
             border: Border.all(color: ZInk.hairline(context)),
           ),
