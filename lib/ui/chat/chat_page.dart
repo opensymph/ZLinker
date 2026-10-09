@@ -1835,7 +1835,7 @@ class _ChatPageState extends State<ChatPage> {
   Widget _kickedOverlay(BuildContext context) {
     return Positioned.fill(
       child: Material(
-        color: ZColors.darkBackground.withValues(alpha: 0.92),
+        color: ZInk.surface(context).withValues(alpha: 0.92),
         child: Center(
           child: Padding(
             padding: const EdgeInsets.all(32),

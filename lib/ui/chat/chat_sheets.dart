@@ -501,7 +501,7 @@ class SlashCommandBar extends StatelessWidget {
         margin: const EdgeInsets.fromLTRB(14, 4, 14, 0),
         padding: const EdgeInsets.all(10),
         decoration: BoxDecoration(
-          color: ZColors.darkCard,
+          color: ZInk.card(context),
           borderRadius: BorderRadius.circular(12),
         ),
         child: Text(
@@ -514,7 +514,7 @@ class SlashCommandBar extends StatelessWidget {
       margin: const EdgeInsets.fromLTRB(14, 4, 14, 0),
       constraints: const BoxConstraints(maxHeight: 260),
       decoration: BoxDecoration(
-        color: ZColors.darkCard,
+        color: ZInk.card(context),
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: ZInk.hairline(context)),
       ),
